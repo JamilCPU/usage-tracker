@@ -62,7 +62,12 @@ function withExtra(f: Filters, extra: Record<string, string | number>): string {
 }
 
 export const getMeta = () => request<Meta>("/api/meta");
-export const getHourly = (f: Filters) => request<Hourly>(`/api/hourly?${toQuery(f)}`);
+/** The chart needs every hour so out-of-range hours can be dimmed client-side. */
+export function hourlyQuery(f: Filters): string {
+  return toQuery({ ...f, hourFrom: 0, hourTo: 23 });
+}
+
+export const getHourly = (f: Filters) => request<Hourly>(`/api/hourly?${hourlyQuery(f)}`);
 export const getTopApps = (f: Filters, limit = 20) =>
   request<{ rows: TopApp[] }>(`/api/top/apps?${withExtra(f, { limit })}`);
 export const getTopDomains = (f: Filters, limit = 20) =>

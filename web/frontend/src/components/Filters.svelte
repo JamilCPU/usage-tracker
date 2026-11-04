@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import type { DeviceMeta } from "../lib/api";
   import { presets, type Filters } from "../lib/filters";
   import { hourLabel } from "../lib/format";
@@ -14,6 +15,8 @@
   // svelte-ignore state_referenced_locally
   let domainText = $state(filters.domain);
   let timer: ReturnType<typeof setTimeout> | undefined;
+
+  onDestroy(() => clearTimeout(timer));
 
   const quick = presets(new Date());
 
@@ -73,8 +76,8 @@
       {/each}
     </div>
     <div class="dates">
-      <label>From <input type="date" value={filters.from} onchange={(e) => update({ from: e.currentTarget.value })} /></label>
-      <label>To (excl.) <input type="date" value={filters.to} onchange={(e) => update({ to: e.currentTarget.value })} /></label>
+      <label>From <input type="date" value={filters.from} onchange={(e) => e.currentTarget.value ? update({ from: e.currentTarget.value }) : (e.currentTarget.value = filters.from)} /></label>
+      <label>To (excl.) <input type="date" value={filters.to} onchange={(e) => e.currentTarget.value ? update({ to: e.currentTarget.value }) : (e.currentTarget.value = filters.to)} /></label>
     </div>
   </div>
 
