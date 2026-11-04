@@ -142,3 +142,29 @@ def test_devices_lists_seeded(seed):
     rows = queries.devices(seed.conn)
     assert [(r.device, r.events) for r in rows] == [("desk-a", 2), ("desk-b", 1)]
     assert rows[0].first_seen == local(9) and rows[0].last_seen == local(12)
+
+
+def test_events_limit_is_clamped(seed):
+    for i in range(queries.MAX_EVENTS_LIMIT + 3):
+        seed.add("desk-a", "window", local(9), local(9, 1), app="editor", title=str(i))
+    f = day_filter()
+    assert len(queries.events(seed.conn, f, None, limit=0).rows) == 1
+    assert len(queries.events(seed.conn, f, None, limit=-5).rows) == 1
+    page = queries.events(seed.conn, f, None, limit=9999)
+    assert len(page.rows) == queries.MAX_EVENTS_LIMIT and page.next_cursor is not None
+
+
+def test_events_includes_overlapping_and_rejects_bad_cursor(seed):
+    seed.add("desk-a", "window", local(9), local(11), app="editor")
+    rows = queries.events(seed.conn, day_filter(t_from=local(10)), None).rows
+    assert len(rows) == 1
+    with pytest.raises(ValueError):
+        queries.events(seed.conn, day_filter(), f"{local(9).isoformat()}|{2**63}")
+
+
+def test_top_limit_is_clamped(seed):
+    for i in range(queries.MAX_TOP_LIMIT + 5):
+        seed.add("desk-a", "window", local(9), local(9, 1), app=f"app{i:03d}")
+    f = day_filter()
+    assert len(queries.top_apps(seed.conn, f, limit=0)) == 1
+    assert len(queries.top_apps(seed.conn, f, limit=9999)) == queries.MAX_TOP_LIMIT

@@ -13,7 +13,8 @@
 --        other the sum can over-count; the clamp at 0 keeps the result sane.)
 --   hourly / top_apps / top_domains / daily aggregate those slices. The hour-of-day
 --   filter (inclusive, in tz) applies to the slice's bucket hour. A NULL or empty
---   devices array means all devices.
+--   devices array means all devices. hour_from > hour_to does not wrap past midnight:
+--   it matches no rows.
 
 CREATE OR REPLACE FUNCTION usage.event_slices(
   p_kind text, devices text[], t_from timestamptz, t_to timestamptz, tz text,

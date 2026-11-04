@@ -5,6 +5,13 @@ from datetime import date, datetime
 
 import psycopg
 
+MAX_EVENTS_LIMIT = 500
+MAX_TOP_LIMIT = 100
+
+
+def _clamp(limit: int, ceiling: int) -> int:
+    return max(1, min(limit, ceiling))
+
 
 @dataclass(frozen=True)
 class Filters:
@@ -96,7 +103,15 @@ def hourly(conn: psycopg.Connection, f: Filters) -> list[HourlyRow]:
 def top_apps(conn: psycopg.Connection, f: Filters, limit: int = 20) -> list[AppRow]:
     cur = conn.execute(
         "SELECT app, seconds FROM usage.top_apps(%s, %s, %s, %s, %s, %s, %s)",
-        (f.device_arg, f.t_from, f.t_to, f.hour_from, f.hour_to, f.tz, limit),
+        (
+            f.device_arg,
+            f.t_from,
+            f.t_to,
+            f.hour_from,
+            f.hour_to,
+            f.tz,
+            _clamp(limit, MAX_TOP_LIMIT),
+        ),
     )
     return [AppRow(*r) for r in cur.fetchall()]
 
@@ -104,7 +119,15 @@ def top_apps(conn: psycopg.Connection, f: Filters, limit: int = 20) -> list[AppR
 def top_domains(conn: psycopg.Connection, f: Filters, limit: int = 20) -> list[DomainRow]:
     cur = conn.execute(
         "SELECT domain, seconds FROM usage.top_domains(%s, %s, %s, %s, %s, %s, %s)",
-        (f.device_arg, f.t_from, f.t_to, f.hour_from, f.hour_to, f.tz, limit),
+        (
+            f.device_arg,
+            f.t_from,
+            f.t_to,
+            f.hour_from,
+            f.hour_to,
+            f.tz,
+            _clamp(limit, MAX_TOP_LIMIT),
+        ),
     )
     return [DomainRow(*r) for r in cur.fetchall()]
 
@@ -127,7 +150,10 @@ def _decode_cursor(cursor: str) -> tuple[datetime, int]:
         parsed = datetime.fromisoformat(ts)
         if parsed.tzinfo is None:
             raise ValueError("cursor timestamp must carry a UTC offset")
-        return parsed, int(ident)
+        row_id = int(ident)
+        if not 0 <= row_id <= 2**63 - 1:
+            raise ValueError("cursor id out of range")
+        return parsed, row_id
     except ValueError as exc:
         raise ValueError(f"invalid cursor: {cursor!r}") from exc
 
@@ -137,7 +163,7 @@ SELECT id, device, ts_start, ts_end, kind, app, title, url, domain
 FROM usage.events
 WHERE kind IN ('window', 'web')
   AND (%(devices)s::text[] IS NULL OR device = ANY(%(devices)s))
-  AND ts_start >= %(t_from)s AND ts_start < %(t_to)s
+  AND ts_end > %(t_from)s AND ts_start < %(t_to)s
   AND extract(hour FROM ts_start AT TIME ZONE %(tz)s) BETWEEN %(hour_from)s AND %(hour_to)s
   AND (%(app)s::text IS NULL OR lower(app) = lower(%(app)s))
   AND (%(domain)s::text IS NULL OR lower(domain) = lower(%(domain)s))
@@ -148,6 +174,7 @@ LIMIT %(lim)s
 
 
 def events(conn: psycopg.Connection, f: Filters, cursor: str | None, limit: int = 200) -> Page:
+    limit = _clamp(limit, MAX_EVENTS_LIMIT)
     cur_ts, cur_id = _decode_cursor(cursor) if cursor else (None, None)
     cur = conn.execute(
         _EVENTS_SQL,
