@@ -3,8 +3,8 @@ Description=ActivityWatch server (aw-server-rust)
 
 [Service]
 ExecStart=@AW_SERVER@
-Restart=on-failure
-RestartSec=10
+Restart=always
+RestartSec=30
 
 [Install]
 WantedBy=default.target

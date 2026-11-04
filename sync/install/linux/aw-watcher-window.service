@@ -6,8 +6,8 @@ Wants=aw-server.service
 [Service]
 ExecStart=@AW_WINDOW@
 @ENV@
-Restart=on-failure
-RestartSec=10
+Restart=always
+RestartSec=30
 
 [Install]
 WantedBy=default.target
