@@ -1,0 +1,4 @@
+[
+  {"id": 123, "timestamp": "2026-11-04T15:00:00.000Z", "duration": 12.5, "data": {"app": "Code.exe", "title": "main.py - project"}},
+  {"id": 124, "timestamp": "2026-11-04T17:00:00+02:00", "duration": 0, "data": {"app": "Code.exe", "title": "zero"}}
+]

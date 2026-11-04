@@ -1,0 +1,7 @@
+{
+  "aw-watcher-window_HOST": {"id": "aw-watcher-window_HOST", "type": "currentwindow", "client": "aw-watcher-window", "hostname": "HOST", "created": "2026-11-01T00:00:00Z"},
+  "aw-watcher-afk_HOST": {"id": "aw-watcher-afk_HOST", "type": "afkstatus", "client": "aw-watcher-afk", "hostname": "HOST", "created": "2026-11-01T00:00:00Z"},
+  "aw-watcher-web-chrome": {"id": "aw-watcher-web-chrome", "type": "web.tab.current", "client": "aw-client-web", "hostname": "HOST", "created": "2026-11-01T00:00:00Z"},
+  "aw-watcher-android-test": {"id": "aw-watcher-android-test", "type": "currentwindow", "client": "aw-android", "hostname": "example-host", "created": "2026-11-01T00:00:00Z"},
+  "aw-stopwatch": {"id": "aw-stopwatch", "type": "general.stopwatch", "client": "aw-stopwatch", "hostname": "HOST", "created": "2026-11-01T00:00:00Z"}
+}
