@@ -186,3 +186,33 @@ def test_run_accepts_real_event(tmp_path):
     stop = threading.Event()
     stop.set()
     sh.run(stop)
+
+
+def test_bad_event_attribute_error_is_skipped(tmp_path):
+    good = ev(1, 30)
+    huge = {**ev(3, 20), "duration": 1e18}  # OverflowError in timedelta
+    sh, _, post, _ = make(tmp_path, [good, ev(2, 25), huge])
+    sh.aw._events[BUCKET][1]["data"] = ["not", "a", "dict"]  # AttributeError in to_event
+    rep = sh.sync_once()
+    assert rep.skipped_bad == 2 and rep.shipped == 1 and rep.errors == []
+
+
+def test_run_survives_sync_once_exception(tmp_path):
+    sh, _, _, _ = make(tmp_path, [])
+    waits = []
+
+    def boom():
+        raise RuntimeError("kaboom")
+
+    sh.sync_once = boom  # type: ignore[method-assign]
+
+    class Stop:
+        def is_set(self):
+            return len(waits) >= 3
+
+        def wait(self, seconds):
+            waits.append(seconds)
+            return self.is_set()
+
+    sh.run(Stop())  # type: ignore[arg-type]
+    assert waits == [60, 120, 240]

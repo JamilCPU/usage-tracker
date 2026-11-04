@@ -95,7 +95,7 @@ class Shipper:
                     raise ValueError("negative duration")
                 if not isinstance(ev["source_event_id"], int):
                     raise ValueError("missing event id")
-            except (KeyError, ValueError, TypeError) as exc:
+            except (KeyError, ValueError, TypeError, AttributeError, OverflowError) as exc:
                 report.skipped_bad += 1
                 log.warning("%s: skipping bad event (%r)", bucket_id, exc)
                 continue
@@ -157,7 +157,11 @@ class Shipper:
     def run(self, stop: threading.Event) -> None:
         failures = 0
         while not stop.is_set():
-            report = self.sync_once()
+            try:
+                report = self.sync_once()
+            except Exception:
+                log.exception("sync cycle failed")
+                report = SyncReport(errors=["sync cycle crashed"])
             if report.errors:
                 failures += 1
                 delay = backoff(failures - 1, self.cfg.interval_seconds)
