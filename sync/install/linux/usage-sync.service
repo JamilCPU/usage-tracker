@@ -1,3 +1,4 @@
+# NOTE: if you edit ExecStart, the -v flag must come BEFORE the subcommand (usage-sync -v run).
 [Unit]
 Description=usage-sync: ship ActivityWatch events to the Lab Data Store
 After=network-online.target aw-server.service
@@ -7,6 +8,7 @@ Wants=network-online.target
 ExecStart=%h/.local/bin/usage-sync run
 Restart=always
 RestartSec=30
+RestartPreventExitStatus=2
 
 [Install]
 WantedBy=default.target

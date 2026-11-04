@@ -15,5 +15,6 @@ ln -sf "$venv/bin/usage-sync" "$HOME/.local/bin/usage-sync"
 install -m 644 "$here/usage-sync.service" "$units/usage-sync.service"
 systemctl --user daemon-reload
 systemctl --user enable usage-sync.service
+systemctl --user try-restart usage-sync
 echo "installed. Next: usage-sync init, put the token in ~/.config/usage-sync/token, then:"
 echo "  systemctl --user start usage-sync"

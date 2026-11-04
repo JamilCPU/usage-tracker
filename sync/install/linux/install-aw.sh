@@ -65,6 +65,7 @@ done
 
 systemctl --user daemon-reload
 systemctl --user enable --now aw-server.service aw-watcher-afk.service aw-watcher-window.service
+systemctl --user try-restart aw-server aw-watcher-afk aw-watcher-window
 loginctl enable-linger "$USER"
 
 for _ in $(seq 1 20); do
