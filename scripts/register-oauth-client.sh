@@ -25,8 +25,8 @@ if ! getent hosts "$host" >/dev/null 2>&1; then
   resolve=(--resolve "${host}:443:${ip}")
 fi
 
-body=$(printf '{"client_name":"usage-web","redirect_uris":["%s/auth/callback"],"grant_types":["authorization_code"],"response_types":["code"],"token_endpoint_auth_method":"none"}' "$PUBLIC_URL")
-resp=$(curl -fsS --cacert "$CA" "${resolve[@]}" -H 'Content-Type: application/json' -d "$body" "$ISSUER/register")
+body=$(printf '{"client_name":"usage-web","redirect_uris":["%s/auth/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}' "$PUBLIC_URL")
+resp=$(curl -sS --fail-with-body --cacert "$CA" "${resolve[@]}" -H 'Content-Type: application/json' -d "$body" "$ISSUER/register")
 client_id=$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["client_id"])')
 
 kubectl -n "$NAMESPACE" create secret generic usage-web \
