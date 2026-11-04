@@ -1,0 +1,4 @@
+[
+  {"id": 41, "timestamp": "2026-11-04T15:00:00.000Z", "duration": 30, "data": {"url": "https://docs.example.com/page?q=1", "title": "Docs", "audible": false, "incognito": false, "tabCount": 3}},
+  {"id": 42, "timestamp": "2026-11-04T15:01:00.000Z", "duration": 30, "data": {"url": "https://secret.example.com/", "title": "Private", "audible": false, "incognito": true, "tabCount": 4}}
+]
