@@ -193,3 +193,21 @@ def test_settings_require_client_id_in_oauth_mode():
 def test_page_redirect_preserves_query(client):
     resp = client.get("/page?range=7d")
     assert resp.headers["location"] == "/auth/login?next=%2Fpage%3Frange%3D7d"
+
+
+def test_connect_host_rewrites_url_but_keeps_host_and_sni(issuer):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return issuer(request)
+
+    app = build(make_settings(OAUTH_CONNECT_HOST="traefik.internal"), issuer)
+    app.state.http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    with TestClient(app, follow_redirects=False, base_url="https://usage.lab") as c:
+        _, state = start_login(c)
+        assert c.get(f"/auth/callback?code=abc&state={state}").status_code == 302
+    assert [r.url.host for r in seen] == ["traefik.internal", "traefik.internal"]
+    assert all(r.headers["host"] == "gateway.test" for r in seen)
+    assert all(r.extensions["sni_hostname"] == "gateway.test" for r in seen)
+    assert [r.url.path for r in seen] == ["/.well-known/oauth-authorization-server", "/token"]

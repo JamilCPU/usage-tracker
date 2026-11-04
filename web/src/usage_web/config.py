@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     OAUTH_CLIENT_ID: str | None = None
     OAUTH_SCOPE: str | None = None
     OAUTH_CA_FILE: str | None = None
+    # Server-side calls to the issuer connect here (Host/SNI stay the issuer's); in-cluster Traefik.
+    OAUTH_CONNECT_HOST: str | None = None
     AUTH_MODE: Literal["oauth", "none"] = "oauth"
     MIGRATIONS_DIR: str = "/app/migrations"
     PORT: int = 8080

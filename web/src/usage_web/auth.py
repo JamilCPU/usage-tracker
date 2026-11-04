@@ -4,7 +4,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -49,13 +49,26 @@ def _client(request: Request) -> httpx.Client:
     return client
 
 
+def _send(request: Request, method: str, url: str, **kwargs) -> httpx.Response:
+    """Issuer request; with OAUTH_CONNECT_HOST set, connect there but keep the issuer Host/SNI."""
+    connect_host = _settings(request).OAUTH_CONNECT_HOST
+    parts = urlsplit(url)
+    if connect_host and parts.hostname == urlsplit(_settings(request).OAUTH_ISSUER).hostname:
+        port = f":{parts.port}" if parts.port else ""
+        public_host = parts.netloc
+        url = urlunsplit(parts._replace(netloc=f"{connect_host}{port}"))
+        kwargs["headers"] = {**kwargs.get("headers", {}), "Host": public_host}
+        kwargs["extensions"] = {**kwargs.get("extensions", {}), "sni_hostname": parts.hostname}
+    return _client(request).request(method, url, **kwargs)
+
+
 def _metadata(request: Request) -> dict:
     cached = getattr(request.app.state, "oauth_metadata", None)
     if cached:
         return cached
     url = _settings(request).OAUTH_ISSUER.rstrip("/") + METADATA_PATH
     try:
-        resp = _client(request).get(url)
+        resp = _send(request, "GET", url)
         resp.raise_for_status()
         meta = resp.json()
         meta["authorization_endpoint"], meta["token_endpoint"]  # noqa: B018
@@ -136,7 +149,7 @@ def callback(request: Request, code: str = "", state: str = "") -> RedirectRespo
         "code_verifier": saved["verifier"],
     }
     try:
-        token = _client(request).post(meta["token_endpoint"], data=form)
+        token = _send(request, "POST", meta["token_endpoint"], data=form)
         token.raise_for_status()
     except httpx.HTTPError as exc:
         raise HTTPException(502, "token exchange failed") from exc
