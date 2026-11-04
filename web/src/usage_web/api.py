@@ -137,8 +137,11 @@ def _run[T](request: Request, fn: Callable[[psycopg.Connection], T]) -> T:
         raise HTTPException(503, detail="database unavailable") from None
 
 
-def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
+def _iso(value: datetime | None, zone: ZoneInfo | None = None) -> str | None:
+    """ISO string; with a zone the value is rendered in local time (the UI slices hour/minute)."""
+    if value is None:
+        return None
+    return (value.astimezone(zone) if zone else value).isoformat()
 
 
 @router.get("/meta")
@@ -169,7 +172,7 @@ def hourly(request: Request, f: Flt) -> dict:
         "tz": f.tz,
         "rows": [
             {
-                "bucket": r.bucket.isoformat(),
+                "bucket": _iso(r.bucket, zone),
                 "device": r.device,
                 "app": r.app,
                 "seconds": float(r.seconds),
@@ -212,6 +215,7 @@ def events(
     limit: str | None = None,
 ) -> dict:
     n = _parse_limit(limit, "limit", 200, queries.MAX_EVENTS_LIMIT)
+    zone = ZoneInfo(f.tz)
     try:
         page = _run(request, lambda conn: queries.events(conn, f, cursor or None, n))
     except ValueError:
@@ -221,8 +225,8 @@ def events(
             {
                 "id": r.id,
                 "device": r.device,
-                "ts_start": _iso(r.ts_start),
-                "ts_end": _iso(r.ts_end),
+                "ts_start": _iso(r.ts_start, zone),
+                "ts_end": _iso(r.ts_end, zone),
                 "kind": r.kind,
                 "app": r.app,
                 "title": r.title,
