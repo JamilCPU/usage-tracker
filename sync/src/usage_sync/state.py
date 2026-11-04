@@ -34,6 +34,9 @@ class State:
     def cursor(self, bucket_id: str) -> datetime | None:
         return self._cursors.get(bucket_id)
 
+    def cursors(self) -> dict[str, datetime]:
+        return dict(self._cursors)
+
     def advance(self, bucket_id: str, ts: datetime) -> None:
         ts = _aware(ts)
         current = self._cursors.get(bucket_id)

@@ -1,0 +1,13 @@
+# usage-sync configuration: ~/.config/usage-sync/config.toml
+# Create it with: usage-sync init --device <device> --ingest-url https://ingest.example
+device = "<device-name>"
+ingest_url = "https://ingest.example"
+# ca_file = "/home/<user>/lab-tls/lab-ca.pem"   # lab CA, if the ingest certificate is lab-signed
+# aw_url = "http://127.0.0.1:5600"
+# interval_seconds = 60
+# batch_size = 1000
+# settle_seconds = 120
+# overlap_seconds = 3600
+# token_file = "/home/<user>/.config/usage-sync/token"   # default: next to this file
+# redact_apps = ["..."]      # defaults are built in
+# redact_domains = ["..."]

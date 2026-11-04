@@ -37,6 +37,32 @@ Cross-device app and website usage tracking: see which apps and sites are used, 
 
 The `usage` schema (events hypertable) is created by the SQL in `migrations/`. See [`migrations/README.md`](migrations/README.md) for how it is applied.
 
+### Linux desktop
+
+Installs ActivityWatch and the sync shim as systemd user services. Needs `python3` (with `venv`), `curl` and an X11 session; run from a clone of this repo as the desktop user.
+
+```bash
+# 1. ActivityWatch (AppImage extracted under ~/.local/opt/activitywatch; units for server, afk and window watchers)
+sync/install/linux/install-aw.sh            # AW_VERSION=v0.14.1 by default
+
+# 2. The shim (venv in ~/.local/opt/usage-sync, symlink in ~/.local/bin, unit enabled but not started)
+sync/install/linux/install-sync.sh
+
+# 3. Config, pointing at the ingest API and the CA that signed its certificate
+usage-sync init --device <device-name> --ingest-url https://<ingest-host> --ca-file <path-to-ca.pem>
+
+# 4. Token: mint one on a machine with kubectl access (lab-data-store/scripts/mint-token.sh), store it mode 600
+( umask 077; mint-token.sh <device-name> usage > ~/.config/usage-sync/token )
+
+# 5. Check, then start
+usage-sync status
+usage-sync once                              # exit code 1 if any bucket failed to ship
+systemctl --user start usage-sync
+journalctl --user -u usage-sync -n 20
+```
+
+`sync/install/linux/config.example.toml` lists every option. Events that could not be shipped (ingest down, network out) stay in ActivityWatch; the shim re-reads from its saved cursor with an overlap, so they are shipped with their original timestamps once the ingest API is back.
+
 _Remaining steps filled in by later tasks._
 
 ## License

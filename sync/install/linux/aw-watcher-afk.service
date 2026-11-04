@@ -1,0 +1,13 @@
+[Unit]
+Description=ActivityWatch AFK watcher
+After=aw-server.service
+Wants=aw-server.service
+
+[Service]
+ExecStart=@AW_AFK@
+@ENV@
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
