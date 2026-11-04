@@ -39,6 +39,33 @@ The `usage` schema (events hypertable) is created by the SQL in `migrations/`. S
 
 _Remaining steps filled in by later tasks._
 
+### Web viewer
+
+`web/` is a FastAPI service (JSON API plus a Svelte single-page UI) that reads the `usage` schema as the read-only `usage_reader` role. It is served at `https://usage.lab` and signs users in through the lab's OAuth gateway (authorization code with PKCE, public client).
+
+Deploy:
+
+1. On the primary node, from this repo: `scripts/build-push.sh` builds the multi-arch image from `web/Dockerfile` (context = repo root, so `migrations/` is baked in) and prints `TAG=<sha>`.
+2. Once: `scripts/register-oauth-client.sh` registers the OAuth client (dynamic client registration against the gateway, using the lab CA) and creates the Secret `usage-web` (`OAUTH_CLIENT_ID`, `SESSION_SECRET`). It never prints the values and does nothing if the Secret exists.
+3. Bump the tag in lab-gitops `apps/usage-tracker/kustomization.yaml`; Flux applies it. A `migrate` init container runs `usage-web migrate` as `usage_owner` on every start (applied migrations are tracked, so it is idempotent).
+
+Environment variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `USAGE_READER_DSN` | Postgres DSN of the read-only role (required) |
+| `USAGE_OWNER_DSN` | DSN of the owner role, only for `usage-web migrate` |
+| `USAGE_TZ` | Time zone for day and hour filters (default `America/Chicago`) |
+| `SESSION_SECRET` | Signs session cookies, at least 16 characters (required) |
+| `PUBLIC_URL` | Public URL, used for the OAuth redirect URI (default `https://usage.lab`) |
+| `OAUTH_ISSUER`, `OAUTH_CLIENT_ID`, `OAUTH_SCOPE` | OAuth gateway issuer, client id and optional scope |
+| `OAUTH_CA_FILE` | CA bundle that verifies the gateway certificate |
+| `OAUTH_CONNECT_HOST` | Connect to the issuer at this host (keeping its Host and SNI); needed in-cluster, where the issuer name resolves to the wrong Service |
+| `AUTH_MODE` | `oauth` (default) or `none` (local development only) |
+| `MIGRATIONS_DIR`, `PORT` | Migrations directory (default `/app/migrations`) and listen port (default `8080`) |
+
+Local development: build the frontend (`cd web/frontend && npm ci && npm run build`), then run `AUTH_MODE=none SESSION_SECRET=local-only-not-secret-0000 USAGE_READER_DSN=... uv run usage-web serve` from `web/`.
+
 ## License
 
 MIT
