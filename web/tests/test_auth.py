@@ -24,7 +24,7 @@ METADATA = {
 def make_settings(**kw):
     base = {
         "USAGE_READER_DSN": "postgresql://unused",
-        "SESSION_SECRET": "test",
+        "SESSION_SECRET": "test-secret-1234567890",
         "OAUTH_CLIENT_ID": "cid",
         "OAUTH_ISSUER": ISSUER,
         "AUTH_MODE": "oauth",
@@ -95,7 +95,11 @@ def test_login_redirects_with_pkce_and_state(client):
     assert "redirect_uri=https%3A%2F%2Fusage.lab%2Fauth%2Fcallback" in loc
     assert "scope=homestudio%3Aread" in loc
     assert "usage_oauth" in resp.headers["set-cookie"]
-    assert "HttpOnly" in resp.headers["set-cookie"]
+    cookie = resp.headers["set-cookie"]
+    assert "Max-Age=600" in cookie
+    assert "SameSite=lax" in cookie
+    assert "Secure" in cookie
+    assert "HttpOnly" in cookie
 
 
 def test_callback_rejects_bad_state(client):
@@ -170,3 +174,22 @@ def test_open_redirect_next_is_neutralised(client):
     _, state = start_login(client, "https://evil.example/")
     done = client.get(f"/auth/callback?code=abc&state={state}")
     assert done.headers["location"] == "/"
+
+
+def test_callback_rejects_non_ascii_state(client):
+    start_login(client)
+    assert (
+        client.get("/auth/callback", params={"code": "abc", "state": "\u00e9"}).status_code == 400
+    )
+
+
+def test_settings_require_client_id_in_oauth_mode():
+    with pytest.raises(ValueError, match="OAUTH_CLIENT_ID"):
+        make_settings(OAUTH_CLIENT_ID=None)
+    with pytest.raises(ValueError, match="SESSION_SECRET"):
+        make_settings(SESSION_SECRET="short")
+
+
+def test_page_redirect_preserves_query(client):
+    resp = client.get("/page?range=7d")
+    assert resp.headers["location"] == "/auth/login?next=%2Fpage%3Frange%3D7d"

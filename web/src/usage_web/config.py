@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,3 +19,12 @@ class Settings(BaseSettings):
     AUTH_MODE: Literal["oauth", "none"] = "oauth"
     MIGRATIONS_DIR: str = "/app/migrations"
     PORT: int = 8080
+
+    @model_validator(mode="after")
+    def _check_auth(self) -> "Settings":
+        if self.AUTH_MODE == "oauth":
+            if not self.OAUTH_CLIENT_ID:
+                raise ValueError("OAUTH_CLIENT_ID is required when AUTH_MODE=oauth")
+            if len(self.SESSION_SECRET) < 16:
+                raise ValueError("SESSION_SECRET must be at least 16 characters")
+        return self

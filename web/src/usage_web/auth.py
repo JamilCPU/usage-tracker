@@ -125,7 +125,7 @@ def callback(request: Request, code: str = "", state: str = "") -> RedirectRespo
         saved = _oauth_serializer(settings).loads(raw, max_age=OAUTH_MAX_AGE)
     except BadSignature as exc:
         raise HTTPException(400, "invalid login state") from exc
-    if not code or not secrets.compare_digest(str(saved.get("state", "")), state):
+    if not code or not secrets.compare_digest(str(saved.get("state", "")).encode(), state.encode()):
         raise HTTPException(400, "state mismatch")
     meta = _metadata(request)
     form = {
@@ -182,7 +182,8 @@ def require_session(request: Request) -> Session:
     path = request.url.path
     if path.startswith("/api/"):
         raise HTTPException(401, "login required")
-    raise LoginRequired(path)
+    query = request.url.query
+    raise LoginRequired(f"{path}?{query}" if query else path)
 
 
 def login_required_handler(request: Request, exc: LoginRequired) -> RedirectResponse:
