@@ -33,7 +33,11 @@ Cross-device app and website usage tracking: see which apps and sites are used, 
 
 ## Quick start
 
-_Filled in by later tasks._
+### Schema
+
+The `usage` schema (events hypertable) is created by the SQL in `migrations/`. See [`migrations/README.md`](migrations/README.md) for how it is applied.
+
+_Remaining steps filled in by later tasks._
 
 ## License
 
