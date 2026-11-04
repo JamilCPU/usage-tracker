@@ -194,3 +194,12 @@ def test_api_requires_session_when_oauth():
         assert page.status_code == 302
         assert page.headers["location"].startswith("/auth/login")
         assert c.get("/healthz").status_code == 200
+
+
+@integration
+def test_timestamps_are_rendered_in_the_configured_zone(client, seed):
+    seed.add("desk-a", "window", local(10), local(12), app="editor")
+    bucket = client.get("/api/hourly", params=RANGE).json()["rows"][0]["bucket"]
+    assert bucket[11:13] == "10"  # the UI slices the local hour out of the string
+    event = client.get("/api/events", params=RANGE).json()["rows"][0]
+    assert event["ts_start"][11:16] == "10:00"
