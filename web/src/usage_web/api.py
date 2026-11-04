@@ -168,7 +168,12 @@ def hourly(request: Request, f: Flt) -> dict:
         "to": f.t_to.isoformat(),
         "tz": f.tz,
         "rows": [
-            {"bucket": r.bucket.isoformat(), "device": r.device, "app": r.app, "seconds": r.seconds}
+            {
+                "bucket": r.bucket.isoformat(),
+                "device": r.device,
+                "app": r.app,
+                "seconds": float(r.seconds),
+            }
             for r in kept
         ],
     }

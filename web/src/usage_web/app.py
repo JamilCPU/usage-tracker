@@ -29,7 +29,9 @@ def create_app(settings: Settings, with_pool: bool = True) -> FastAPI:
             if app.state.pool is not None:
                 app.state.pool.close()
 
-    app = FastAPI(title="usage-web", lifespan=lifespan)
+    app = FastAPI(
+        title="usage-web", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
+    )
     app.state.settings = settings
     app.state.pool = None
     app.include_router(auth_router)
