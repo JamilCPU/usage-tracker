@@ -41,7 +41,7 @@ def test_migrate_rolls_back_failed_file(usage_schema_dsn, tmp_path):
 
 
 def test_migrate_real_migrations_create_hypertable(usage_schema_dsn):
-    assert apply(usage_schema_dsn, REAL_MIGRATIONS) == ["0001"]
+    assert apply(usage_schema_dsn, REAL_MIGRATIONS) == ["0001", "0002"]
     with psycopg.connect(usage_schema_dsn) as conn:
         row = conn.execute(
             "SELECT 1 FROM timescaledb_information.hypertables "
