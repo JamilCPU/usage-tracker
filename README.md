@@ -69,7 +69,7 @@ The phone is read by a second `usage-sync` instance on the Linux desktop (pull),
 
 ### Windows desktop
 
-Per-user install (no admin): ActivityWatch plus the sync shim as logon scheduled tasks. Needs Python 3 on `PATH` and PowerShell 5.1+. Details in [`sync/install/windows/README.md`](sync/install/windows/README.md).
+Per-user install (no admin): ActivityWatch plus the sync shim as logon scheduled tasks. Needs Python 3 on `PATH` and PowerShell 5.1+. Python 3.11+ is required; `tzdata` is a Windows-only dependency (the shim is otherwise stdlib-only) and logs go to `%LOCALAPPDATA%\usage-sync\usage-sync.log`. Details in [`sync/install/windows/README.md`](sync/install/windows/README.md).
 
 ```powershell
 sync\install\windows\install.ps1 -DryRun     # preview
