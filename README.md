@@ -63,6 +63,23 @@ journalctl --user -u usage-sync -n 20
 
 `sync/install/linux/config.example.toml` lists every option. Events that could not be shipped (ingest down, network out) stay in ActivityWatch; the shim re-reads from its saved cursor with an overlap, so they are shipped with their original timestamps once the ingest API is back.
 
+### Windows desktop
+
+Per-user install (no admin): ActivityWatch plus the sync shim as logon scheduled tasks. Needs Python 3 on `PATH` and PowerShell 5.1+. Details in [`sync/install/windows/README.md`](sync/install/windows/README.md).
+
+```powershell
+sync\install\windows\install.ps1 -DryRun     # preview
+sync\install\windows\install.ps1 -Device <device-name> -IngestUrl https://<ingest-host> -CaFile <path-to-ca.pem> -NodeSsh <user>@<node>
+```
+
+Install the "ActivityWatch Web Watcher" extension in the browser manually. To import history from the older `activity-logger` and check it against ActivityWatch:
+
+```powershell
+usage-sync import-activity-logger <path-to-sqlite> --device <device-name> --dry-run   # counts only
+usage-sync import-activity-logger <path-to-sqlite> --device <device-name>             # idempotent, safe to re-run
+usage-sync compare-activity-logger <path-to-sqlite> --date YYYY-MM-DD --tz <zone>     # per-app table, PASS/WARN
+```
+
 _Remaining steps filled in by later tasks._
 
 ### Web viewer

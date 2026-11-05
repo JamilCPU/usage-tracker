@@ -1,0 +1,13 @@
+# usage-sync configuration: %LOCALAPPDATA%\usage-sync\config.toml
+# Created by install.ps1 (usage-sync init). Single-quoted TOML strings keep backslashes literal.
+device = "<device-name>"
+ingest_url = "https://ingest.example"
+# ca_file = 'C:\Users\<user>\lab-tls\lab-ca.pem'   # lab CA, if the ingest certificate is lab-signed
+# aw_url = "http://127.0.0.1:5600"
+# interval_seconds = 60
+# batch_size = 1000
+# settle_seconds = 120
+# overlap_seconds = 3600
+# token_file = 'C:\Users\<user>\AppData\Local\usage-sync\token'   # default: next to this file
+# redact_apps = ["..."]      # defaults are built in
+# redact_domains = ["..."]

@@ -8,11 +8,17 @@ import logging
 import signal
 import sys
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from usage_sync.aw import AwClient, AwError
 from usage_sync.config import Config, ConfigError, default_config_dir
+from usage_sync.importer import (
+    compare_activity_logger,
+    import_activity_logger,
+    print_compare_report,
+    print_import_report,
+)
 from usage_sync.shipper import Shipper, urllib_post
 from usage_sync.state import State
 
@@ -40,6 +46,17 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show config, ActivityWatch reachability and cursors")
     sub.add_parser("once", help="run one sync cycle")
     sub.add_parser("run", help="sync continuously until SIGINT/SIGTERM")
+
+    imp = sub.add_parser("import-activity-logger", help="ship old activity-logger history")
+    imp.add_argument("sqlite_path", type=Path)
+    imp.add_argument("--device", required=True)
+    imp.add_argument("--batch-size", type=int, default=1000)
+    imp.add_argument("--dry-run", action="store_true", help="count rows, post nothing")
+
+    cmp_ = sub.add_parser("compare-activity-logger", help="compare old history with ActivityWatch")
+    cmp_.add_argument("sqlite_path", type=Path)
+    cmp_.add_argument("--date", required=True, type=date.fromisoformat, help="YYYY-MM-DD")
+    cmp_.add_argument("--tz", default="America/Chicago")
     return parser
 
 
@@ -122,6 +139,31 @@ def _cmd_run(cfg: Config, path: Path) -> int:
     return 0
 
 
+def _cmd_import(cfg: Config, args: argparse.Namespace) -> int:
+    report = import_activity_logger(
+        args.sqlite_path,
+        args.device,
+        cfg,
+        urllib_post(cfg.ca_file),
+        batch_size=args.batch_size,
+        dry_run=args.dry_run,
+    )
+    print_import_report(report, args.dry_run)
+    for err in report.errors:
+        print(f"error: {err}", file=sys.stderr)
+    return 1 if report.errors else 0
+
+
+def _cmd_compare(cfg: Config, args: argparse.Namespace) -> int:
+    try:
+        report = compare_activity_logger(args.sqlite_path, args.date, AwClient(cfg.aw_url), args.tz)
+    except (ValueError, AwError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print_compare_report(report, args.date)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -136,6 +178,10 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if args.command == "import-activity-logger":
+        return _cmd_import(cfg, args)
+    if args.command == "compare-activity-logger":
+        return _cmd_compare(cfg, args)
     handlers = {"status": _cmd_status, "once": _cmd_once, "run": _cmd_run}
     return handlers[args.command](cfg, args.config)
 

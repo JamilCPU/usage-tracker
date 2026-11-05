@@ -63,6 +63,15 @@ def _wire(event: dict, device: str) -> dict:
     }
 
 
+def post_batch(cfg: Config, post: Post, token: str, events: list[dict]) -> tuple[int, bytes]:
+    """POST one batch of events (datetime timestamps) to the ingest API."""
+    url = f"{cfg.ingest_url.rstrip('/')}/v1/ingest"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    batch = [_wire(e, cfg.device) for e in events]
+    body = json.dumps({"source": "usage", "device": cfg.device, "events": batch})
+    return post(url, body.encode("utf-8"), headers)
+
+
 class Shipper:
     def __init__(
         self,
@@ -113,20 +122,17 @@ class Shipper:
         events = self._collect(bucket_id, kind, raw, report)
         if not events:
             return
-        url = f"{self.cfg.ingest_url.rstrip('/')}/v1/ingest"
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         size = self.cfg.batch_size
         for i in range(0, len(events), size):
-            batch = [_wire(e, self.cfg.device) for e in events[i : i + size]]
-            body = json.dumps({"source": "usage", "device": self.cfg.device, "events": batch})
-            status, resp = self.post(url, body.encode("utf-8"), headers)
+            chunk = events[i : i + size]
+            status, resp = post_batch(self.cfg, self.post, token, chunk)
             if status != 200:
                 text = resp.decode("utf-8", errors="replace")
                 if status == 422:
                     log.warning("%s: ingest rejected a row: %s", bucket_id, text)
                 report.errors.append(f"{bucket_id}: HTTP {status} {text[:200]}")
                 return
-            report.shipped += len(batch)
+            report.shipped += len(chunk)
         cutoff = now - timedelta(seconds=self.cfg.settle_seconds)
         settled = [e["ts_end"] for e in events if e["ts_end"] <= cutoff]
         report.skipped_unsettled += len(events) - len(settled)
