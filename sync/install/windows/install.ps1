@@ -4,6 +4,7 @@
 .PARAMETER Device      Device name shipped with every event (default: lower-cased computer name).
 .PARAMETER IngestUrl   Base URL of the ingest API.
 .PARAMETER CaFile      Optional CA bundle that signed the ingest certificate.
+.PARAMETER IngestConnectHost  Optional host or host:port to connect to instead of resolving the ingest host name.
 .PARAMETER NodeSsh     Optional user@host; used only to mint the device token over SSH (never echoed).
 .PARAMETER AwVersion   ActivityWatch tag, e.g. v0.13.2 (default: newest release with a Windows zip).
 .PARAMETER RepoPath    Root of this repository (default: derived from the script location).
@@ -16,6 +17,7 @@ param(
     [string]$Device = $env:COMPUTERNAME.ToLower(),
     [string]$IngestUrl = 'https://ingest.lab',
     [string]$CaFile,
+    [string]$IngestConnectHost,
     [string]$NodeSsh,
     [string]$AwVersion,
     [string]$RepoPath = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
@@ -123,6 +125,9 @@ if ($CaFile) {
     if (-not (Test-Path -LiteralPath $CaFile)) { throw "-CaFile not found: $CaFile" }
     $CaFile = (Resolve-Path -LiteralPath $CaFile).Path
 }
+if ($IngestConnectHost -and $IngestConnectHost -notmatch '^[A-Za-z0-9.\-:\[\]]+$') {
+    throw "invalid -IngestConnectHost '$IngestConnectHost'"
+}
 $py = Find-Python
 Step "python: $($py -join ' ')"
 
@@ -188,6 +193,7 @@ if ((Test-Path $cfgFile) -and -not $Force) {
     if (-not $DryRun) {
         $initArgs = @('--config', $cfgFile, 'init', '--device', $Device, '--ingest-url', $IngestUrl, '--force')
         if ($CaFile) { $initArgs += @('--ca-file', $CaFile) }
+        if ($IngestConnectHost) { $initArgs += @('--ingest-connect-host', $IngestConnectHost) }
         & $venvCli @initArgs
         if ($LASTEXITCODE -ne 0) { throw 'usage-sync init failed' }
     }

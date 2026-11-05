@@ -203,7 +203,7 @@ def test_cli_import_and_compare_wiring(tmp_path, capsys, monkeypatch):
     base = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
     make_db(db, [row(1, base.timestamp(), base.timestamp() + 600, proc="alpha.exe")])
     post = FakePost()
-    monkeypatch.setattr(cli, "urllib_post", lambda ca: post)
+    monkeypatch.setattr(cli, "urllib_post", lambda ca, ch=None: post)
     common = ["--config", str(cfg_path)]
 
     code = cli.main([*common, "import-activity-logger", str(db), "--device", "gpu", "--dry-run"])

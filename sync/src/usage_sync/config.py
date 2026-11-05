@@ -22,6 +22,29 @@ def default_config_dir() -> Path:
     return (Path(xdg) if xdg else Path.home() / ".config") / "usage-sync"
 
 
+def parse_connect_host(value: object) -> tuple[str, int | None]:
+    """Parse `host`, `host:port`, `[v6]` or `[v6]:port` into (host, port or None)."""
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError("ingest_connect_host must be a non-empty string")
+    text = value.strip()
+    if text.startswith("["):
+        host, sep, rest = text[1:].partition("]")
+        port_text = rest[1:] if rest.startswith(":") else ""
+        if rest and not rest.startswith(":"):
+            raise ConfigError(f"invalid ingest_connect_host {value!r}")
+        has_port = bool(rest)
+    else:
+        host, sep, port_text = text.partition(":")
+        has_port = bool(sep)
+    if not host:
+        raise ConfigError(f"invalid ingest_connect_host {value!r}")
+    if not has_port:
+        return host, None
+    if not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
+        raise ConfigError(f"invalid port in ingest_connect_host {value!r}")
+    return host, int(port_text)
+
+
 @dataclass
 class Config:
     ingest_url: str
@@ -36,8 +59,16 @@ class Config:
     redact_domains: list[str] = field(default_factory=lambda: list(DEFAULT_DOMAINS))
     token_file: Path | None = None
     ca_file: str | None = None
+    ingest_connect_host: str | None = None
 
     def __post_init__(self) -> None:
+        timeout = self.aw_timeout_seconds
+        if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
+            raise ConfigError("aw_timeout_seconds must be a number greater than 0")
+        if self.ingest_connect_host is not None:
+            parse_connect_host(self.ingest_connect_host)
+            if not self.ingest_url.lower().startswith("https://"):
+                raise ConfigError("ingest_connect_host requires an https ingest_url")
         if self.token_file is None:
             self.token_file = default_config_dir() / "token"
         else:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
+import socket
 import ssl
 import threading
 import urllib.error
@@ -11,9 +13,10 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 from usage_sync.aw import AwClient
-from usage_sync.config import Config
+from usage_sync.config import Config, parse_connect_host
 from usage_sync.mapping import bucket_kind, to_event
 from usage_sync.redact import Redactor
 from usage_sync.state import State
@@ -40,13 +43,44 @@ def backoff(n: int, base: int) -> int:
     return min(base * 2**n, MAX_BACKOFF)
 
 
-def urllib_post(ca_file: str | None) -> Post:
+class _ConnectHTTPSConnection(http.client.HTTPSConnection):
+    """Dial a fixed address, but keep the URL host for Host header, SNI and verification."""
+
+    def __init__(self, *args, connect_host: str, connect_port: int | None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._connect_host = connect_host
+        self._connect_port = connect_port
+
+    def connect(self) -> None:
+        port = self._connect_port or self.port
+        sock = socket.create_connection(
+            (self._connect_host, port), self.timeout, self.source_address
+        )
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _ConnectHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, context: ssl.SSLContext, host: str, port: int | None) -> None:
+        super().__init__(context=context)
+        self._ctx, self._host, self._port = context, host, port
+
+    def https_open(self, req):
+        conn = partial(_ConnectHTTPSConnection, connect_host=self._host, connect_port=self._port)
+        return self.do_open(conn, req, context=self._ctx)
+
+
+def urllib_post(ca_file: str | None, connect_host: str | None = None) -> Post:
     ctx = ssl.create_default_context(cafile=ca_file)
+    if connect_host is None:
+        open_url = partial(urllib.request.urlopen, context=ctx)
+    else:
+        host, port = parse_connect_host(connect_host)
+        open_url = urllib.request.build_opener(_ConnectHTTPSHandler(ctx, host, port)).open
 
     def post(url: str, body: bytes, headers: dict[str, str]) -> tuple[int, bytes]:
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            with open_url(req, timeout=30) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()

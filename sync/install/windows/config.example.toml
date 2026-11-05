@@ -3,6 +3,7 @@
 device = "<device-name>"
 ingest_url = "https://ingest.example"
 # ca_file = 'C:\Users\<user>\lab-tls\lab-ca.pem'   # lab CA, if the ingest certificate is lab-signed
+# ingest_connect_host = "<ip-or-host>[:port]"   # connect here instead of resolving the ingest host (https only; TLS still verifies the ingest_url host)
 # aw_url = "http://127.0.0.1:5600"
 # interval_seconds = 60
 # batch_size = 1000
