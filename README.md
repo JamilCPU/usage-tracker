@@ -1,6 +1,6 @@
 # usage-tracker
 
-Cross-device app and website usage tracking: see which apps and sites are used, and when, across a Windows PC, a Linux desktop and an Android phone. [ActivityWatch](https://activitywatch.net/) watchers collect events on each device; a small sync shim ships settled events, with their original timestamps, to the [lab-data-store](https://github.com/JamilCPU/lab-data-store) ingest API. Events land in a `usage` schema on TimescaleDB, and a web viewer lets you explore them with device, date and hour filters.
+Cross-device app and website usage tracking: see which apps and sites are used, and when, across a Windows PC, a Linux desktop and an Android phone. [ActivityWatch](https://activitywatch.net/) watchers collect events on each device; a small sync shim ships settled events, with their original timestamps, to the [lab-data-store](https://github.com/JamilCPU/lab-data-store) ingest API. Events land in a `usage` schema on TimescaleDB, and a web viewer lets you explore them with device, date, hour, app and domain filters.
 
 ## Architecture
 
@@ -19,7 +19,7 @@ Cross-device app and website usage tracking: see which apps and sites are used, 
 - **Watchers**: ActivityWatch on each device records the active app and browser tab.
 - **Sync shim**: periodically reads settled events from the local ActivityWatch instance and posts them in batches to the ingest API with a per-device token; original timestamps are preserved and re-sent windows are de-duplicated.
 - **Schema**: the `usage` schema and its migrations live in this repo; the store repo only provides the server, roles and conventions.
-- **Web viewer**: reads the `usage` schema through a read-only role and filters by device, date and hour.
+- **Web viewer**: reads the `usage` schema through a read-only role and filters by device, date, hour, app and domain.
 
 ## Repo layout
 
@@ -29,7 +29,7 @@ Cross-device app and website usage tracking: see which apps and sites are used, 
 | `sync/` | ActivityWatch sync shim (Python) |
 | `web/` | Web viewer (API and UI) |
 | `scripts/` | Install and operational helpers |
-| `.github/workflows/` | CI (lint and tests for each Python package once present) |
+| `.github/workflows/` | CI (lint and tests for each Python package, frontend checks, image build) |
 
 ## Quick start
 
@@ -69,7 +69,7 @@ The phone is read by a second `usage-sync` instance on the Linux desktop (pull),
 
 ### Windows desktop
 
-Per-user install (no admin): ActivityWatch plus the sync shim as logon scheduled tasks. Needs Python 3 on `PATH` and PowerShell 5.1+. Python 3.11+ is required; `tzdata` is a Windows-only dependency (the shim is otherwise stdlib-only) and logs go to `%LOCALAPPDATA%\usage-sync\usage-sync.log`. Details in [`sync/install/windows/README.md`](sync/install/windows/README.md).
+Per-user install (no admin): ActivityWatch plus the sync shim as logon scheduled tasks. Needs PowerShell 5.1+ and Python 3.11+ that is NOT the Microsoft Store build; the installer finds a uv-managed one or installs 3.12 via uv. `tzdata` is a Windows-only dependency (the shim is otherwise stdlib-only) and logs go to `%LOCALAPPDATA%\usage-sync\usage-sync.log`. Details in [`sync/install/windows/README.md`](sync/install/windows/README.md).
 
 ```powershell
 sync\install\windows\install.ps1 -DryRun     # preview
@@ -80,11 +80,27 @@ Install the "ActivityWatch Web Watcher" extension in the browser manually. To im
 
 ```powershell
 usage-sync import-activity-logger <path-to-sqlite> --device <device-name> --dry-run   # counts only
-usage-sync import-activity-logger <path-to-sqlite> --device <device-name>             # idempotent, safe to re-run
+usage-sync import-activity-logger <path-to-sqlite> --device <device-name> --until <ISO-datetime-with-offset>   # idempotent, safe to re-run
 usage-sync compare-activity-logger <path-to-sqlite> --date YYYY-MM-DD --tz <zone>     # per-app table, PASS/WARN
 ```
 
-_Remaining steps filled in by later tasks._
+`--until` (timezone-aware) imports only rows that start before it: use the first event time of the new client so the overlap is not double-counted. More options in [`sync/install/windows/README.md`](sync/install/windows/README.md).
+
+## Privacy
+
+What is captured: the focused application and its window title (desktop), the active browser tab's URL, title and domain (Linux and Windows, with the web watcher extension), and the foreground app on Android. Nothing is read from page contents, keystrokes or the clipboard. Events go only to your own ingest API.
+
+Rules applied on the device before anything is shipped:
+
+- **Incognito and private windows**: web events from private browser windows are dropped, and window events whose title carries a private-window marker (`private browsing`, `inprivate`, `incognito`, `private window`; configurable with `redact_title_markers`) have their title blanked. The app name is kept.
+- **Redaction**: password managers (`redact_apps`) lose their title and URL. A web event whose domain matches `redact_domains` (banks and payment sites by default) loses its title and URL, and a window whose title contains one of those domains has its title blanked. Matching is a case-insensitive substring.
+- **Lock screen = idle**: the lock-screen and logon processes (`idle_apps`) are stored as idle window events with no title, and idle time is subtracted from usage in the viewer. The events list hides them.
+
+## Known limits
+
+- The hour filter on the events list uses the event's start hour; an event that runs across an hour boundary appears under the hour it started in. Charts and totals split time per hour.
+- The phone reports the foreground app only: no browser tabs or titles.
+- Daily totals and the device comparison always cover all hours and all apps; they ignore the hour and app filters.
 
 ### Web viewer
 
@@ -100,7 +116,7 @@ Environment variables:
 
 | Variable | Meaning |
 | --- | --- |
-| `USAGE_READER_DSN` | Postgres DSN of the read-only role (required) |
+| `USAGE_READER_DSN` | Postgres DSN of the read-only role (required for `serve`, not needed for `migrate`) |
 | `USAGE_OWNER_DSN` | DSN of the owner role, only for `usage-web migrate` |
 | `USAGE_TZ` | Time zone for day and hour filters (default `America/Chicago`) |
 | `SESSION_SECRET` | Signs session cookies, at least 16 characters (required) |
