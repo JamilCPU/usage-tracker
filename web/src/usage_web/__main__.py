@@ -11,6 +11,8 @@ def _serve() -> None:
     from .app import create_app
 
     settings = Settings()
+    if not settings.USAGE_READER_DSN:
+        sys.exit("USAGE_READER_DSN is required for serve")
     uvicorn.run(create_app(settings), host="0.0.0.0", port=settings.PORT)  # noqa: S104
 
 

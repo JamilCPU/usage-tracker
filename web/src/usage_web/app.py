@@ -22,6 +22,8 @@ NOT_BUILT_HTML = (
 def create_app(settings: Settings, with_pool: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if with_pool and not settings.USAGE_READER_DSN:
+            raise RuntimeError("USAGE_READER_DSN is required to serve")
         app.state.pool = db.open_pool(settings.USAGE_READER_DSN) if with_pool else None
         try:
             yield

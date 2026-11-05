@@ -168,3 +168,67 @@ def test_top_limit_is_clamped(seed):
     f = day_filter()
     assert len(queries.top_apps(seed.conn, f, limit=0)) == 1
     assert len(queries.top_apps(seed.conn, f, limit=9999)) == queries.MAX_TOP_LIMIT
+
+
+def _old_event_slices_sql() -> str:
+    """The 0002 definition of usage.event_slices, renamed so both can run side by side."""
+    text = (REAL_MIGRATIONS / "0002_usage_functions.sql").read_text(encoding="utf-8")
+    start = text.index("CREATE OR REPLACE FUNCTION usage.event_slices(")
+    end = text.index("$$;", text.index("LANGUAGE sql", start)) + 3
+    return text[start:end].replace("usage.event_slices(", "usage.event_slices_0002(", 1)
+
+
+def test_idle_cte_matches_0002_semantics(seed):
+    seed.conn.execute(_old_event_slices_sql())
+    for dev in ("desk-a", "desk-b"):
+        seed.add(dev, "window", local(8, 10), local(13, 40), app="editor")
+        seed.add(dev, "window", local(12), local(15), app="Browser")
+        seed.add(dev, "window", local(9), local(9, 30), app="LockApp.exe", idle=True)
+    seed.add("desk-a", "web", local(10), local(11, 30), domain="x.example")
+    # overlapping idle intervals (sum over-counts, clamped at 0), plus ones partly/fully
+    # outside the query window and an active (non-idle) afk event
+    seed.add("desk-a", "afk", local(9), local(10, 30), idle=True)
+    seed.add("desk-a", "afk", local(10), local(11), idle=True)
+    seed.add("desk-a", "afk", local(10, 10), local(10, 20), idle=True)
+    seed.add("desk-a", "afk", local(11, 45), local(12, 15), idle=True)
+    seed.add("desk-a", "afk", local(14), local(16), idle=True)
+    seed.add("desk-a", "afk", local(5), local(6), idle=True)
+    seed.add("desk-a", "afk", local(13), local(14), idle=False)
+    seed.add("desk-b", "afk", local(12, 30), local(14), idle=True)
+
+    windows = [
+        (local(0), local(0, day=21)),
+        (local(10, 15), local(13, 5)),
+        (local(14, 30), local(15, 30)),
+    ]
+    for kind in ("window", "web"):
+        for devices in (None, [], ["desk-a"], ["desk-b"], ["desk-a", "desk-b"]):
+            for app in (None, "editor"):
+                for t_from, t_to in windows:
+                    args = (kind, devices, t_from, t_to, TZ, app)
+                    query = (
+                        "SELECT bucket, device, app, domain, seconds "
+                        "FROM usage.{}(%s,%s,%s,%s,%s,%s)"
+                    )
+                    new = seed.conn.execute(query.format("event_slices"), args).fetchall()
+                    old = seed.conn.execute(query.format("event_slices_0002"), args).fetchall()
+                    assert sorted(new, key=repr) == sorted(old, key=repr), args
+    assert (
+        seed.conn.execute(
+            "SELECT count(*) FROM usage.event_slices('window', NULL, %s, %s, %s)",
+            (local(0), local(0, day=21), TZ),
+        ).fetchone()[0]
+        > 0
+    )
+
+
+def test_migration_0003_recorded_and_idle_index_exists(seed, test_dsn):
+    versions = [
+        r[0] for r in seed.conn.execute("SELECT version FROM usage.schema_migrations ORDER BY 1")
+    ]
+    assert versions == ["0001", "0002", "0003"]
+    row = seed.conn.execute(
+        "SELECT indexdef FROM pg_indexes WHERE indexname = 'events_afk_idle'"
+    ).fetchone()
+    assert row and "WHERE" in row[0]
+    assert apply(test_dsn, REAL_MIGRATIONS) == []  # idempotent re-apply
