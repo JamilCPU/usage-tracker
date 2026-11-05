@@ -31,9 +31,17 @@ usage-sync --config ~/.config/usage-sync-phone/config.toml init \
 # 3. Token for the phone's device name. mint-token.sh lives in the lab-data-store repo on the
 #    cluster node, so mint it there over SSH and write it into this instance's directory:
 ( umask 077; ssh <node> 'bash ~/src/lab-data-store/scripts/mint-token.sh <phone> usage' > ~/.config/usage-sync-phone/token )
-#    If this desktop IS the cluster node, run the script directly:
-( umask 077; bash ~/src/lab-data-store/scripts/mint-token.sh <phone> usage > ~/.config/usage-sync-phone/token )
+```
 
+If this desktop IS the cluster node, run the script directly instead of the ssh form:
+
+```bash
+( umask 077; bash ~/src/lab-data-store/scripts/mint-token.sh <phone> usage > ~/.config/usage-sync-phone/token )
+```
+
+Then start and verify:
+
+```bash
 # 4. Start, then verify
 systemctl --user start usage-sync@phone
 usage-sync --config ~/.config/usage-sync-phone/config.toml status    # shows the aw url

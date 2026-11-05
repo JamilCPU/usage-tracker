@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import tomllib
 from dataclasses import dataclass, field, fields
@@ -28,10 +29,10 @@ def parse_connect_host(value: object) -> tuple[str, int | None]:
         raise ConfigError("ingest_connect_host must be a non-empty string")
     text = value.strip()
     if text.startswith("["):
-        host, sep, rest = text[1:].partition("]")
-        port_text = rest[1:] if rest.startswith(":") else ""
-        if rest and not rest.startswith(":"):
+        host, closed, rest = text[1:].partition("]")
+        if not closed or (rest and not rest.startswith(":")):
             raise ConfigError(f"invalid ingest_connect_host {value!r}")
+        port_text = rest[1:]
         has_port = bool(rest)
     else:
         host, sep, port_text = text.partition(":")
@@ -40,7 +41,7 @@ def parse_connect_host(value: object) -> tuple[str, int | None]:
         raise ConfigError(f"invalid ingest_connect_host {value!r}")
     if not has_port:
         return host, None
-    if not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
+    if not (port_text.isascii() and port_text.isdecimal()) or not 1 <= int(port_text) <= 65535:
         raise ConfigError(f"invalid port in ingest_connect_host {value!r}")
     return host, int(port_text)
 
@@ -63,7 +64,12 @@ class Config:
 
     def __post_init__(self) -> None:
         timeout = self.aw_timeout_seconds
-        if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, int | float)
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
             raise ConfigError("aw_timeout_seconds must be a number greater than 0")
         if self.ingest_connect_host is not None:
             parse_connect_host(self.ingest_connect_host)

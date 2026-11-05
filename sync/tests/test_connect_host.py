@@ -13,7 +13,7 @@ def write_cfg(tmp_path, extra=""):
 
 
 def test_parse_connect_host_forms():
-    assert parse_connect_host("10.1.2.3") == ("10.1.2.3", None)
+    assert parse_connect_host("192.0.2.10") == ("192.0.2.10", None)
     assert parse_connect_host("node.example:8443") == ("node.example", 8443)
     assert parse_connect_host("[::1]:8443") == ("::1", 8443)
     assert parse_connect_host("[::1]") == ("::1", None)
@@ -26,8 +26,8 @@ def test_parse_connect_host_rejects(bad):
 
 
 def test_config_loads_and_validates_connect_host(tmp_path):
-    cfg = Config.load(write_cfg(tmp_path, 'ingest_connect_host = "10.1.2.3:8443"\n'))
-    assert cfg.ingest_connect_host == "10.1.2.3:8443"
+    cfg = Config.load(write_cfg(tmp_path, 'ingest_connect_host = "192.0.2.10:8443"\n'))
+    assert cfg.ingest_connect_host == "192.0.2.10:8443"
     assert Config.load(write_cfg(tmp_path)).ingest_connect_host is None
     with pytest.raises(ConfigError):
         Config.load(write_cfg(tmp_path, 'ingest_connect_host = ""\n'))
@@ -38,7 +38,7 @@ def test_config_loads_and_validates_connect_host(tmp_path):
 def test_connect_host_requires_https(tmp_path):
     cfg = tmp_path / "config.toml"
     cfg.write_text(
-        'ingest_url = "http://ingest.example"\ndevice = "pc"\ningest_connect_host = "1.2.3.4"\n',
+        'ingest_url = "http://ingest.example"\ndevice = "pc"\ningest_connect_host = "192.0.2.11"\n',
         encoding="utf-8",
     )
     with pytest.raises(ConfigError, match="https"):
@@ -80,30 +80,30 @@ def test_connection_dials_override_but_verifies_url_host(monkeypatch):
     monkeypatch.setattr(shipper.socket, "create_connection", fake_create)
     ctx = FakeCtx()
     conn = shipper._ConnectHTTPSConnection(
-        "ingest.example", context=ctx, connect_host="10.1.2.3", connect_port=None
+        "ingest.example", context=ctx, connect_host="192.0.2.10", connect_port=None
     )
     conn.connect()
-    assert dialed == [("10.1.2.3", 443)]
+    assert dialed == [("192.0.2.10", 443)]
     assert ctx.wrapped == ("raw-socket", "ingest.example")
     assert conn.sock == "tls-socket"
 
     conn = shipper._ConnectHTTPSConnection(
-        "ingest.example", 9443, context=ctx, connect_host="10.1.2.3", connect_port=8443
+        "ingest.example", 9443, context=ctx, connect_host="192.0.2.10", connect_port=8443
     )
     conn.connect()
-    assert dialed[-1] == ("10.1.2.3", 8443)
+    assert dialed[-1] == ("192.0.2.10", 8443)
 
 
 def test_urllib_post_builds_with_and_without_override():
     assert callable(shipper.urllib_post(None))
-    assert callable(shipper.urllib_post(None, "10.1.2.3:8443"))
+    assert callable(shipper.urllib_post(None, "192.0.2.10:8443"))
 
 
 def test_init_writes_and_status_shows_connect_host(tmp_path, capsys, monkeypatch):
     path = tmp_path / "cfg" / "config.toml"
     args = ["--config", str(path), "init", "--device", "pc", "--ingest-url", "https://i.example"]
-    assert cli.main([*args, "--ingest-connect-host", "10.1.2.3:8443"]) == 0
-    assert 'ingest_connect_host = "10.1.2.3:8443"' in path.read_text(encoding="utf-8")
+    assert cli.main([*args, "--ingest-connect-host", "192.0.2.10:8443"]) == 0
+    assert 'ingest_connect_host = "192.0.2.10:8443"' in path.read_text(encoding="utf-8")
     assert cli.main([*args, "--ingest-connect-host", "h:abc", "--force"]) == 2
     capsys.readouterr()
 
@@ -116,12 +116,12 @@ def test_init_writes_and_status_shows_connect_host(tmp_path, capsys, monkeypatch
 
     monkeypatch.setattr(cli, "AwClient", FakeAw)
     assert cli.main(["--config", str(path), "status"]) == 0
-    assert "connect via: 10.1.2.3:8443" in capsys.readouterr().out
+    assert "connect via: 192.0.2.10:8443" in capsys.readouterr().out
 
 
 def test_all_post_factories_get_connect_host(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(cli, "urllib_post", lambda ca, ch=None: seen.append((ca, ch)) or None)
-    cfg = Config(ingest_url="https://i.example", device="pc", ingest_connect_host="1.2.3.4")
+    cfg = Config(ingest_url="https://i.example", device="pc", ingest_connect_host="192.0.2.11")
     cli._make_shipper(cfg, tmp_path / "config.toml")
-    assert seen == [(None, "1.2.3.4")]
+    assert seen == [(None, "192.0.2.11")]
