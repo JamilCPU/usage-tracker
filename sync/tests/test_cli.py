@@ -153,3 +153,71 @@ def test_logs_to_rotating_file_without_stderr(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert code == 0 and "log file:" in out
     assert "hello-from-test" in (cfg.parent / "usage-sync.log").read_text(encoding="utf-8")
+
+
+def test_status_shows_aw_url(tmp_path, capsys, monkeypatch):
+    cfg = write_cfg(tmp_path)
+    cfg.write_text(cfg.read_text(encoding="utf-8") + 'aw_url = "http://phone.example:5600"\n')
+    monkeypatch.setattr(cli, "AwClient", FakeAw)
+    code, out, _ = run(["--config", str(cfg), "status"], capsys)
+    assert code == 0
+    assert "aw url:     http://phone.example:5600" in out
+
+
+def test_aw_timeout_from_config(tmp_path, capsys, monkeypatch):
+    from usage_sync.config import Config
+
+    assert Config(ingest_url="https://i.example", device="pc").aw_timeout_seconds == 10
+    cfg = write_cfg(tmp_path)
+    cfg.write_text(cfg.read_text(encoding="utf-8") + "aw_timeout_seconds = 25\n")
+    assert Config.load(cfg).aw_timeout_seconds == 25
+    seen = []
+
+    class Spy(FakeAw):
+        def __init__(self, base_url, timeout=10):
+            seen.append(timeout)
+
+    class FakeShipper:
+        def __init__(self, *a, **k):
+            pass
+
+        def sync_once(self):
+            return SyncReport()
+
+    monkeypatch.setattr(cli, "AwClient", Spy)
+    monkeypatch.setattr(cli, "Shipper", FakeShipper)
+    run(["--config", str(cfg), "once"], capsys)
+    run(["--config", str(cfg), "status"], capsys)
+    assert seen == [25, 25]
+
+
+def test_instance_config_dir_isolated(tmp_path, capsys, monkeypatch):
+    from usage_sync.config import Config
+
+    dirs = []
+    for name in ("a", "b"):
+        cfg = tmp_path / f"usage-sync-{name}" / "config.toml"
+        cfg.parent.mkdir()
+        cfg.write_text(f'ingest_url = "https://i.example"\ndevice = "{name}"\n', encoding="utf-8")
+        dirs.append(cfg)
+    assert Config.load(dirs[0]).token_file == dirs[0].parent / "token"
+    assert Config.load(dirs[1]).token_file == dirs[1].parent / "token"
+    State(dirs[0].parent / "state.json").advance("bkt", datetime(2026, 1, 1, tzinfo=UTC))
+    monkeypatch.setattr(cli, "AwClient", FakeAw)
+    _, out_a, _ = run(["--config", str(dirs[0]), "status"], capsys)
+    _, out_b, _ = run(["--config", str(dirs[1]), "status"], capsys)
+    assert "bkt" in out_a and "cursors: none yet" in out_b
+    assert not (dirs[1].parent / "state.json").exists()
+
+
+def test_install_script_bash_syntax():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash not available")
+    script = Path(__file__).parents[1] / "install" / "linux" / "install-sync.sh"
+    result = subprocess.run([bash, "-n", str(script)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr

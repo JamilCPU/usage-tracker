@@ -111,10 +111,11 @@ def _cmd_status(cfg: Config, path: Path, log_path: Path | None = None) -> int:
     print(f"log file:   {log_path or path.parent / 'usage-sync.log'}")
     print(f"device:     {cfg.device}")
     print(f"ingest url: {cfg.ingest_url}")
+    print(f"aw url:     {cfg.aw_url}")
     present = cfg.token_file.is_file()
     print(f"token file: {'present' if present else 'missing'} ({cfg.token_file})")
     try:
-        AwClient(cfg.aw_url, timeout=5).ping()
+        AwClient(cfg.aw_url, cfg.aw_timeout_seconds).ping()
         print(f"activitywatch: reachable ({cfg.aw_url})")
     except AwError as exc:
         print(f"activitywatch: unreachable ({exc})")
@@ -132,7 +133,7 @@ def _cmd_status(cfg: Config, path: Path, log_path: Path | None = None) -> int:
 def _make_shipper(cfg: Config, path: Path) -> Shipper:
     return Shipper(
         cfg,
-        AwClient(cfg.aw_url),
+        AwClient(cfg.aw_url, cfg.aw_timeout_seconds),
         State(path.parent / "state.json"),
         urllib_post(cfg.ca_file),
         lambda: datetime.now(UTC),
@@ -186,7 +187,8 @@ def _cmd_import(cfg: Config, args: argparse.Namespace) -> int:
 
 def _cmd_compare(cfg: Config, args: argparse.Namespace) -> int:
     try:
-        report = compare_activity_logger(args.sqlite_path, args.date, AwClient(cfg.aw_url), args.tz)
+        aw = AwClient(cfg.aw_url, cfg.aw_timeout_seconds)
+        report = compare_activity_logger(args.sqlite_path, args.date, aw, args.tz)
     except (ValueError, AwError, OSError, sqlite3.Error) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
