@@ -77,6 +77,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
     if args.ingest_connect_host:
         try:
             parse_connect_host(args.ingest_connect_host)
+            if not args.ingest_url.lower().startswith("https://"):
+                raise ConfigError("--ingest-connect-host requires an https --ingest-url")
         except ConfigError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
@@ -218,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = Config.load(args.config)
     except ConfigError as exc:
+        log.error("config error: %s", exc)  # reaches the log file under pythonw
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if args.command == "import-activity-logger":

@@ -69,13 +69,37 @@ class _ConnectHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(conn, req, context=self._ctx)
 
 
-def urllib_post(ca_file: str | None, connect_host: str | None = None) -> Post:
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow redirects: a 3xx from the ingest API surfaces as (status, body)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _ssl_context(ca_file: str | None) -> ssl.SSLContext:
     ctx = ssl.create_default_context(cafile=ca_file)
-    if connect_host is None:
-        open_url = partial(urllib.request.urlopen, context=ctx)
+    if ca_file:
+        # Python 3.13+ enables VERIFY_X509_STRICT, which rejects a private CA certificate
+        # that lacks a keyUsage extension. For a pinned CA, drop only that flag; chain,
+        # hostname and SNI verification stay on.
+        ctx.verify_flags &= ~getattr(ssl, "VERIFY_X509_STRICT", 0)
+    return ctx
+
+
+def _build_opener(ctx: ssl.SSLContext, override: tuple[str, int | None] | None):
+    handlers: list = [urllib.request.ProxyHandler({})]  # never send the token via a proxy
+    if override is None:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
     else:
-        host, port = parse_connect_host(connect_host)
-        open_url = urllib.request.build_opener(_ConnectHTTPSHandler(ctx, host, port)).open
+        handlers.append(_ConnectHTTPSHandler(ctx, *override))
+    handlers.append(_NoRedirect())
+    return urllib.request.build_opener(*handlers)
+
+
+def urllib_post(ca_file: str | None, connect_host: str | None = None) -> Post:
+    ctx = _ssl_context(ca_file)
+    override = parse_connect_host(connect_host) if connect_host is not None else None
+    open_url = _build_opener(ctx, override).open
 
     def post(url: str, body: bytes, headers: dict[str, str]) -> tuple[int, bytes]:
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
@@ -83,7 +107,10 @@ def urllib_post(ca_file: str | None, connect_host: str | None = None) -> Post:
             with open_url(req, timeout=30) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
-            return exc.code, exc.read()
+            try:
+                return exc.code, exc.read()
+            finally:
+                exc.close()
 
     return post
 

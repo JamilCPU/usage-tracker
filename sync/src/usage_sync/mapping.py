@@ -26,6 +26,11 @@ def _parse_ts(value: str) -> datetime:
     return dt
 
 
+def _clean(value):
+    """Strip NUL bytes: Postgres text cannot store them and the ingest API rejects them."""
+    return value.replace("\x00", "") if isinstance(value, str) else value
+
+
 def to_event(bucket_id: str, kind: str, aw_event: dict) -> dict | None:
     data = aw_event.get("data") or {}
     ts_start = _parse_ts(aw_event["timestamp"])
@@ -48,6 +53,7 @@ def to_event(bucket_id: str, kind: str, aw_event: dict) -> dict | None:
     else:
         return None
 
+    app, title, url, domain = (_clean(v) for v in (app, title, url, domain))
     return {
         "ts_start": ts_start,
         "ts_end": ts_end,

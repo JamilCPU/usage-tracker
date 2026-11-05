@@ -5,6 +5,7 @@
 .PARAMETER IngestUrl   Base URL of the ingest API.
 .PARAMETER CaFile      Optional CA bundle that signed the ingest certificate.
 .PARAMETER IngestConnectHost  Optional host or host:port to connect to instead of resolving the ingest host name.
+.PARAMETER PythonPath  Optional Python 3.11-3.13 interpreter to build the venv with (never Microsoft Store Python).
 .PARAMETER NodeSsh     Optional user@host; used only to mint the device token over SSH (never echoed).
 .PARAMETER AwVersion   ActivityWatch tag, e.g. v0.13.2 (default: newest release with a Windows zip).
 .PARAMETER RepoPath    Root of this repository (default: derived from the script location).
@@ -19,6 +20,7 @@ param(
     [string]$CaFile,
     [string]$IngestConnectHost,
     [string]$NodeSsh,
+    [string]$PythonPath,
     [string]$AwVersion,
     [string]$RepoPath = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
     [switch]$Force,
@@ -73,30 +75,57 @@ function Get-AwRelease {
 
 function Find-Python {
     # Returns an argv array (exe first) for a Python >= 3.11; fails with a clear message.
+    # Order: -PythonPath, uv-managed/known interpreters (3.11-3.13), py -3, python.
+    # Microsoft Store Python is rejected: it virtualizes %LOCALAPPDATA%, so the shim could not
+    # see the config, token and CA that this script writes there.
     $problems = @()
-    foreach ($cand in @(@('py', '-3'), @('python'))) {
-        $cmd = Get-Command $cand[0] -ErrorAction SilentlyContinue
-        if (-not $cmd) { continue }
-        $rest = @($cand | Select-Object -Skip 1)
-        $isStoreAlias = $cmd.Source -like '*\WindowsApps\*'
-        $ok = $false
-        try {
-            $out = & $cmd.Source @rest -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' 2>$null
-            $code = $LASTEXITCODE
-            $ok = ($code -eq 0)
-            if (-not $ok -and ($code -eq 9009 -or ($isStoreAlias -and -not $out))) {
-                $problems += "$($cmd.Source) is the Microsoft Store alias, not a real Python"
+    $uv = Get-Command uv -ErrorAction SilentlyContinue
+    $tried = 0
+    foreach ($round in 1, 2) {
+        $cands = @()
+        if ($PythonPath) { $cands += , @($PythonPath) }
+        if ($uv) {
+            $found = @(& $uv.Source python find '>=3.11,<3.14' 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $found.Count -gt 0 -and $found[0]) { $cands += , @("$($found[0])".Trim()) }
+        }
+        if ((Get-Command py -ErrorAction SilentlyContinue)) { $cands += , @('py', '-3') }
+        if ((Get-Command python -ErrorAction SilentlyContinue)) { $cands += , @('python') }
+        foreach ($cand in $cands) {
+            $exe = $cand[0]
+            $rest = @($cand | Select-Object -Skip 1)
+            $label = ($cand -join ' ')
+            $lines = @()
+            try {
+                $lines = @(& $exe @rest -c 'import sys; print(sys.version_info[:2] >= (3,11)); print(sys.base_prefix)' 2>$null)
+            } catch {
+                $problems += "$label failed to run"
                 continue
             }
-        } catch {
-            $problems += "$($cmd.Source) failed to run ($($_.Exception.Message))"
+            if ($LASTEXITCODE -ne 0 -or $lines.Count -lt 2) {
+                $problems += "$label is not a working Python (Microsoft Store alias?)"
+                continue
+            }
+            $prefix = "$($lines[1])"
+            $resolved = (Get-Command $exe -ErrorAction SilentlyContinue).Source
+            if ($prefix -like '*\WindowsApps\*' -or $resolved -like '*\WindowsApps\*') {
+                $problems += "$label is Microsoft Store Python (virtualizes AppData, so the shim could not read its config/token)"
+                continue
+            }
+            if ("$($lines[0])" -ne 'True') {
+                $problems += "$label is older than Python 3.11"
+                continue
+            }
+            return , (@($exe) + $rest)
+        }
+        if ($round -eq 1 -and $uv -and -not $DryRun) {
+            Write-Host 'no suitable Python found; installing Python 3.12 with uv (user-level)'
+            & $uv.Source python install 3.12
             continue
         }
-        if ($ok) { return , (@($cmd.Source) + $rest) }
-        $problems += "$($cmd.Source) is older than Python 3.11"
+        break
     }
     $detail = $problems -join '; '
-    throw "Python 3.11 or newer is required (py -3 or python on PATH, not the Microsoft Store alias). $detail"
+    throw "A real Python 3.11-3.13 is required (not Microsoft Store Python). Either install Python from python.org (and re-run), install uv (https://docs.astral.sh/uv/) so this script can fetch one, or pass -PythonPath. $detail"
 }
 
 function Get-ProcessesUnder([string[]]$Dirs) {
@@ -118,7 +147,7 @@ function Stop-ProcessesUnder([string[]]$Dirs) {
 }
 
 # 0. preflight: validate inputs and Python before touching anything (also under -DryRun)
-if ($Device -notmatch '^[a-z0-9][a-z0-9._-]*$') {
+if ($Device -cnotmatch '^[a-z0-9][a-z0-9._-]*$') {
     throw "invalid -Device '$Device': use lower-case letters, digits, '.', '_' or '-'"
 }
 if ($CaFile) {
@@ -188,6 +217,11 @@ if (-not $DryRun) {
 # 4. config
 if ((Test-Path $cfgFile) -and -not $Force) {
     Step "keep existing $cfgFile (use -Force to overwrite)"
+    foreach ($ignored in 'IngestUrl', 'CaFile', 'IngestConnectHost', 'Device') {
+        if ($PSBoundParameters.ContainsKey($ignored)) {
+            Write-Warning "-$ignored was ignored because $cfgFile already exists; use -Force to rewrite it"
+        }
+    }
 } else {
     Step "write $cfgFile via usage-sync init (device=$Device, ingest_url=$IngestUrl)"
     if (-not $DryRun) {
@@ -205,7 +239,7 @@ if (Test-Path $tokenFile) {
 } elseif ($NodeSsh) {
     Step "mint a device token over SSH ($NodeSsh) into $tokenFile (value is never printed)"
     if (-not $DryRun) {
-        $remote = "kubectl -n lab exec deploy/ingest-api -- store-admin token create --device $Device --source usage"
+        $remote = "kubectl -n lab exec deploy/ingest-api -c ingest-api -- store-admin token create --device $Device --source usage"
         $token = (& ssh $NodeSsh $remote) -join ''
         if ($LASTEXITCODE -ne 0 -or -not $token.Trim()) { throw 'token creation over SSH failed' }
         Set-Content -Path $tokenFile -Value $token.Trim() -NoNewline -Encoding ascii

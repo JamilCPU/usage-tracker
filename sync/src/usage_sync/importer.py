@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from usage_sync.aw import AwClient
 from usage_sync.config import Config
-from usage_sync.mapping import bucket_kind, to_event
+from usage_sync.mapping import _clean, bucket_kind, to_event
 from usage_sync.redact import Redactor
 from usage_sync.shipper import Post, post_batch
 
@@ -67,8 +67,8 @@ def _build_event(row: Mapping | sqlite3.Row) -> dict | None:
         "ts_start": _utc(start),
         "ts_end": _utc(end),
         "kind": "afk" if idle else "window",
-        "app": None if idle else (row["process_name"] or row["app_name"]),
-        "title": None if idle else row["window_title"],
+        "app": None if idle else _clean(row["process_name"] or row["app_name"]),
+        "title": None if idle else _clean(row["window_title"]),
         "url": None,
         "domain": None,
         "idle": idle,
