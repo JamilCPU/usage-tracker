@@ -1,0 +1,13 @@
+[Unit]
+Description=usage-sync (%i): pull a remote ActivityWatch server and ship to the Lab Data Store
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/usage-sync --config %h/.config/usage-sync-%i/config.toml run
+Restart=always
+RestartSec=30
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=default.target
