@@ -8,6 +8,7 @@ import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from usage_sync.mapping import IDLE_APPS
 from usage_sync.redact import DEFAULT_APPS, DEFAULT_DOMAINS
 
 
@@ -58,11 +59,16 @@ class Config:
     overlap_seconds: int = 3600
     redact_apps: list[str] = field(default_factory=lambda: list(DEFAULT_APPS))
     redact_domains: list[str] = field(default_factory=lambda: list(DEFAULT_DOMAINS))
+    idle_apps: list[str] = field(default_factory=lambda: list(IDLE_APPS))
     token_file: Path | None = None
     ca_file: str | None = None
     ingest_connect_host: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.idle_apps, list) or not all(
+            isinstance(a, str) for a in self.idle_apps
+        ):
+            raise ConfigError("idle_apps must be a list of strings")
         timeout = self.aw_timeout_seconds
         if (
             isinstance(timeout, bool)

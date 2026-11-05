@@ -11,5 +11,6 @@ ingest_url = "https://ingest.example"
 # settle_seconds = 120
 # overlap_seconds = 3600
 # token_file = "/home/<user>/.config/usage-sync/token"   # default: next to this file
+# idle_apps = ["lockapp.exe", "logonui.exe"]   # focused apps that count as idle (lock screen); defaults built in
 # redact_apps = ["..."]      # defaults are built in
 # redact_domains = ["..."]

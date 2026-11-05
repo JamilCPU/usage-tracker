@@ -24,3 +24,14 @@ Flags: `-AwVersion`, `-RepoPath`, `-Force` (overwrite config), `-NoStart`, `-Dry
 Install the "ActivityWatch Web Watcher" browser extension manually from the browser's extension store.
 
 To bring old `activity-logger` history over, see the "Windows desktop" section in the top-level README.
+
+## Importing old activity-logger history
+
+```powershell
+usage-sync import-activity-logger <path-to-sqlite> --device <device-name> --dry-run --until <ISO-datetime-with-offset>
+usage-sync import-activity-logger <path-to-sqlite> --device <device-name> --until <ISO-datetime-with-offset>
+```
+
+`--until` (timezone-aware, e.g. `2026-11-05T09:00:00+00:00`) imports only rows that start before it: use the first event time of the new client as the cutoff so the overlap is not double-counted. The dry run prints the cutoff and the counts. Re-running is safe (events are idempotent).
+
+Lock-screen and logon processes (`idle_apps`, default `lockapp.exe`, `logonui.exe` and the Linux/macOS equivalents) are shipped as idle window events with a blank title, both live and on import, so they do not count as app usage. Override the list with `idle_apps` in `config.toml` (case-insensitive exact match, with or without `.exe`).

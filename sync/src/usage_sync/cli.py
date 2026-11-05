@@ -28,6 +28,16 @@ from usage_sync.state import State
 log = logging.getLogger("usage_sync")
 
 
+def _aware_datetime(text: str) -> datetime:
+    try:
+        value = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid ISO datetime {text!r}") from exc
+    if value.tzinfo is None:
+        raise argparse.ArgumentTypeError("--until must include a timezone (e.g. +00:00 or Z)")
+    return value
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="usage-sync", description=__doc__)
     parser.add_argument(
@@ -59,6 +69,12 @@ def _build_parser() -> argparse.ArgumentParser:
     imp.add_argument("sqlite_path", type=Path)
     imp.add_argument("--device", required=True)
     imp.add_argument("--batch-size", type=int, default=1000)
+    imp.add_argument(
+        "--until",
+        type=_aware_datetime,
+        help="only import rows starting before this timezone-aware ISO datetime; use the first "
+        "event time of the new client so the overlap is not double-counted",
+    )
     imp.add_argument("--dry-run", action="store_true", help="count rows, post nothing")
 
     cmp_ = sub.add_parser("compare-activity-logger", help="compare old history with ActivityWatch")
@@ -191,11 +207,12 @@ def _cmd_import(cfg: Config, args: argparse.Namespace) -> int:
             urllib_post(cfg.ca_file, cfg.ingest_connect_host),
             batch_size=args.batch_size,
             dry_run=args.dry_run,
+            until=args.until,
         )
     except (sqlite3.Error, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print_import_report(report, args.dry_run)
+    print_import_report(report, args.dry_run, args.until)
     for err in report.errors:
         print(f"error: {err}", file=sys.stderr)
     return 1 if report.errors else 0
