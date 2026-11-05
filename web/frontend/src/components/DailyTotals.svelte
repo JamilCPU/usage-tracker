@@ -24,6 +24,7 @@
 
 <section class="card" aria-label="Daily totals">
   <h2>Daily totals</h2>
+  <p class="muted caption">all hours, all apps</p>
   {#if rows.length === 0}
     <p class="empty">No usage in this range.</p>
   {:else}

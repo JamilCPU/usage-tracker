@@ -108,3 +108,8 @@ a {
   color: var(--muted);
   padding: 12px 0;
 }
+
+.caption {
+  margin: -0.25rem 0 0.5rem;
+  font-size: 0.75rem;
+}
