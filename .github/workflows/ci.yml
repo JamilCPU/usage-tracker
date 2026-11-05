@@ -14,13 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-        if: hashFiles('sync/pyproject.toml') != ''
-      - if: hashFiles('sync/pyproject.toml') != ''
-        run: uv sync --locked
-      - if: hashFiles('sync/pyproject.toml') != ''
-        run: uv run ruff check .
-      - if: hashFiles('sync/pyproject.toml') != ''
-        run: uv run pytest -q
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run pytest -q -W error
 
   web:
     runs-on: ubuntu-latest
@@ -42,13 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-        if: hashFiles('web/pyproject.toml') != ''
-      - if: hashFiles('web/pyproject.toml') != ''
-        run: uv sync --locked
-      - if: hashFiles('web/pyproject.toml') != ''
-        run: uv run ruff check .
-      - if: hashFiles('web/pyproject.toml') != ''
-        run: uv run pytest -q
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run pytest -q -W error
         env:
           TEST_ADMIN_DSN: postgresql://postgres:ci@localhost:5432/postgres
 

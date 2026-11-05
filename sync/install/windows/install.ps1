@@ -104,7 +104,25 @@ function Invoke-Native {
         $ErrorActionPreference = $saved
     }
     $out = @($all | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
-    return @{ Out = $out; Code = $code }
+    $err = @($all | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
+    return @{ Out = $out; Err = $err; Code = $code }
+}
+
+function Test-PythonCandidate([string[]]$Cand) {
+    # Returns '' when $Cand (exe first) is a real, non-venv CPython 3.11-3.13, else the reason.
+    $exe = $Cand[0]
+    $rest = @($Cand | Select-Object -Skip 1)
+    $label = ($Cand -join ' ')
+    $probe = 'import sys; print(sys.version_info[:2] >= (3,11) and sys.version_info[:2] < (3,14)); print(sys.base_prefix); print(sys.prefix != sys.base_prefix)'
+    $r = Invoke-Native $exe (@($rest) + @('-c', $probe))
+    if ($r.Code -ne 0 -or $r.Out.Count -lt 3) { return "$label is not a working Python (Microsoft Store alias?)" }
+    $resolved = (Get-Command $exe -ErrorAction SilentlyContinue).Source
+    if ($r.Out[1] -like '*\WindowsApps\*' -or $resolved -like '*\WindowsApps\*') {
+        return "$label is Microsoft Store Python (virtualizes AppData, so the shim could not read its config/token)"
+    }
+    if ($r.Out[2] -eq 'True') { return "$label is inside a virtual environment" }
+    if ($r.Out[0] -ne 'True') { return "$label is not Python 3.11-3.13" }
+    return ''
 }
 
 function Find-Python {
@@ -113,6 +131,11 @@ function Find-Python {
     # (it virtualizes %LOCALAPPDATA%, so the shim could not see the config, token and CA this
     # script writes there) and anything inside a virtual environment (e.g. a project .venv).
     $problems = @()
+    if ($PythonPath) {
+        # an explicit choice is never silently replaced by another interpreter
+        $bad = Test-PythonCandidate @($PythonPath)
+        if ($bad) { throw "-PythonPath rejected: $bad" }
+    }
     $uv = Get-Command uv -ErrorAction SilentlyContinue
     foreach ($round in 1, 2) {
         $cands = @()
@@ -128,26 +151,8 @@ function Find-Python {
         foreach ($cand in $cands) {
             $exe = $cand[0]
             $rest = @($cand | Select-Object -Skip 1)
-            $label = ($cand -join ' ')
-            $probe = 'import sys; print(sys.version_info[:2] >= (3,11) and sys.version_info[:2] < (3,14)); print(sys.base_prefix); print(sys.prefix != sys.base_prefix)'
-            $r = Invoke-Native $exe (@($rest) + @('-c', $probe))
-            if ($r.Code -ne 0 -or $r.Out.Count -lt 3) {
-                $problems += "$label is not a working Python (Microsoft Store alias?)"
-                continue
-            }
-            $resolved = (Get-Command $exe -ErrorAction SilentlyContinue).Source
-            if ($r.Out[1] -like '*\WindowsApps\*' -or $resolved -like '*\WindowsApps\*') {
-                $problems += "$label is Microsoft Store Python (virtualizes AppData, so the shim could not read its config/token)"
-                continue
-            }
-            if ($r.Out[2] -eq 'True') {
-                $problems += "$label is inside a virtual environment"
-                continue
-            }
-            if ($r.Out[0] -ne 'True') {
-                $problems += "$label is not Python 3.11-3.13"
-                continue
-            }
+            $problem = Test-PythonCandidate $cand
+            if ($problem) { $problems += $problem; continue }
             return , (@($exe) + $rest)
         }
         if ($round -eq 1 -and $uv -and -not $DryRun) {
@@ -164,15 +169,21 @@ function Find-Python {
 
 function Test-Packaged {
     # True when this process has Windows package identity (e.g. a terminal inside an MSIX app).
-    if (-not ('UsageSync.Pkg' -as [type])) {
-        Add-Type -Namespace UsageSync -Name Pkg -MemberDefinition @'
+    # If the check itself fails, warn and assume an ordinary (unpackaged) process.
+    try {
+        if (-not ('UsageSync.Pkg' -as [type])) {
+            Add-Type -Namespace UsageSync -Name Pkg -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
 public static extern int GetCurrentPackageFullName(ref int length, System.Text.StringBuilder name);
 '@
+        }
+        $len = 0
+        $rc = [UsageSync.Pkg]::GetCurrentPackageFullName([ref]$len, $null)
+        return ($rc -ne 15700)   # 15700 = APPMODEL_ERROR_NO_PACKAGE
+    } catch {
+        Write-Warning "could not check for package identity ($($_.Exception.Message)); assuming an unpackaged process"
+        return $false
     }
-    $len = 0
-    $rc = [UsageSync.Pkg]::GetCurrentPackageFullName([ref]$len, $null)
-    return ($rc -ne 15700)   # 15700 = APPMODEL_ERROR_NO_PACKAGE
 }
 
 function New-OutsideDirectory([string]$Dir) {
@@ -191,9 +202,14 @@ function New-OutsideDirectory([string]$Dir) {
     } finally {
         Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
     }
-    $redirected = Test-Path (Join-Path $env:LOCALAPPDATA 'Packages\*\LocalCache\Local\usage-sync')
-    if ($redirected -or -not (Test-Path $Dir)) {
-        throw "$Dir is still redirected to a package's private storage; re-run from a normal PowerShell window"
+    # the task may still be starting: wait up to 10 s for the directory to appear
+    for ($n = 0; $n -lt 20 -and -not (Test-Path $Dir); $n++) { Start-Sleep -Milliseconds 500 }
+    if (-not (Test-Path $Dir)) {
+        throw "$Dir was not created; re-run from a normal PowerShell window"
+    }
+    $stale = @(Get-Item -Path (Join-Path $env:LOCALAPPDATA 'Packages\*\LocalCache\Local\usage-sync') -ErrorAction SilentlyContinue)
+    foreach ($copy in $stale) {
+        Write-Warning "a stale redirected copy exists at $($copy.FullName); it is not used and can be deleted"
     }
 }
 
@@ -225,6 +241,9 @@ if ($CaFile) {
 }
 if ($IngestConnectHost -and $IngestConnectHost -notmatch '^[A-Za-z0-9.\-:\[\]]+$') {
     throw "invalid -IngestConnectHost '$IngestConnectHost'"
+}
+if ($NodeSsh -and $NodeSsh -notmatch '^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$') {
+    throw "invalid -NodeSsh '$NodeSsh': expected user@host"
 }
 $py = Find-Python
 Step "python: $($py -join ' ')"
@@ -356,7 +375,7 @@ if ($NoStart) {
             Start-Sleep -Seconds 1
         }
         $result = (Get-ScheduledTaskInfo -TaskName 'usage-sync').LastTaskResult
-        if ($state -ne 'Running' -and $result -ne 0 -and $result -ne 267009) {
+        if ($state -ne 'Running' -and $result -ne 0 -and $result -ne 267009 -and $result -ne 267011) {
             Write-Host ('usage-sync task failed to start: result 0x{0:X8}' -f ([uint32]([int64]$result -band 0xFFFFFFFF)))
             $logFile = Join-Path $cfgDir 'usage-sync.log'
             if (Test-Path $logFile) { Get-Content -Path $logFile -Tail 20 }
@@ -369,6 +388,7 @@ if ($NoStart) {
         # status does not exercise the ingest path, so ship once for real
         $once = Invoke-Native $venvPy @('-m', 'usage_sync', '--config', $cfgFile, 'once')
         $once.Out | ForEach-Object { Write-Host $_ }
+        $once.Err | ForEach-Object { Write-Host "stderr: $_" }
         if ($once.Code -ne 0) { Write-Warning "usage-sync once exited with code $($once.Code); see the log at $(Join-Path $cfgDir 'usage-sync.log')" }
     }
 }
