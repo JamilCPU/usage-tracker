@@ -11,6 +11,8 @@ BUCKET = "aw-watcher-window_pc"
 
 
 class FakeAw:
+    """Mimics aw-server: events overlapping [start, end], newest first, cut at `limit`."""
+
     def __init__(self, events, buckets=None):
         self._events = events
         self._buckets = buckets or {BUCKET: {"id": BUCKET, "type": "currentwindow"}}
@@ -19,10 +21,27 @@ class FakeAw:
     def buckets(self):
         return self._buckets
 
+    @staticmethod
+    def _span(e):
+        try:
+            ts = datetime.fromisoformat(e["timestamp"])
+            return ts, ts + timedelta(seconds=e.get("duration") or 0)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+
     def events(self, bucket_id, start, end, limit=5000):
         self.calls.append((bucket_id, start, end, limit))
-        floor = start.isoformat()
-        return [e for e in self._events.get(bucket_id, []) if e.get("timestamp", "z") >= floor]
+        hits = []
+        for e in self._events.get(bucket_id, []):
+            span = self._span(e)
+            if span is None:
+                # unparseable timestamp: only the first span of a full pull sees it
+                if start == datetime(1970, 1, 1, tzinfo=UTC):
+                    hits.append((datetime.min.replace(tzinfo=UTC), e))
+            elif span[1] > start and span[0] < end:
+                hits.append((span[0], e))
+        hits.sort(key=lambda h: h[0], reverse=True)
+        return [e for _, e in hits[:limit]]
 
 
 class FakePost:
@@ -216,3 +235,75 @@ def test_run_survives_sync_once_exception(tmp_path):
 
     sh.run(Stop())  # type: ignore[arg-type]
     assert waits == [60, 120, 240]
+
+
+def test_window_over_limit_is_paged_forward_without_loss(tmp_path, monkeypatch):
+    monkeypatch.setattr("usage_sync.shipper.FETCH_LIMIT", 10)
+    events = [ev(i, 3000 - i * 10, dur=5) for i in range(1, 201)]  # 200 events over ~33 hours
+    sh, st, post, aw = make(tmp_path, events, batch_size=7)
+    st.advance(BUCKET, NOW - timedelta(days=3))
+    seen = []
+    real = st.advance
+    st.advance = lambda b, ts: (seen.append(ts), real(b, ts))  # type: ignore[method-assign]
+    rep = sh.sync_once()
+    assert rep.errors == []
+    ids = [e["source_event_id"] for c in post.calls for e in c[1]["events"]]
+    assert set(ids) == set(range(1, 201))
+    firsts = [ids.index(i) for i in range(1, 201)]
+    assert firsts == sorted(firsts)  # time order across spans
+    assert seen == sorted(seen)
+    assert st.cursor(BUCKET) == NOW - timedelta(minutes=1000) + timedelta(seconds=5)
+    assert all(c[2] - c[1] <= timedelta(days=1) for c in aw.calls)
+
+
+def test_span_floor_logs_error_and_terminates(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr("usage_sync.shipper.FETCH_LIMIT", 3)
+    events = [
+        {
+            "id": i,
+            "timestamp": (NOW - timedelta(minutes=30, seconds=-i)).isoformat(),
+            "duration": 0,
+            "data": {"app": "code", "title": "t"},
+        }
+        for i in range(10)
+    ]  # ten events inside one 5 minute span: it cannot be split further
+    sh, st, post, aw = make(tmp_path, events)
+    st.advance(BUCKET, NOW - timedelta(minutes=40))
+    with caplog.at_level("ERROR"):
+        rep = sh.sync_once()
+    assert "row limit" in caplog.text and BUCKET in caplog.text
+    assert rep.errors == [] and len(aw.calls) < 100
+    assert min(c[2] - c[1] for c in aw.calls) == timedelta(minutes=5)
+
+
+def test_failure_mid_way_keeps_cursor_at_last_shipped_span(tmp_path, monkeypatch):
+    monkeypatch.setattr("usage_sync.shipper.FETCH_LIMIT", 5)
+    # one event every 2 hours for ~2.7 days: a day holds 12 events, so spans shrink to 6h
+    events = [ev(i, 4000 - i * 120, dur=60) for i in range(1, 34)]
+    sh, st, post, aw = make(tmp_path, events)
+    st.advance(BUCKET, NOW - timedelta(days=3))
+    seen = []
+    real = st.advance
+    st.advance = lambda b, ts: (seen.append(ts), real(b, ts))  # type: ignore[method-assign]
+    n = {"posts": 0}
+
+    def flaky(url, body, headers):
+        n["posts"] += 1
+        if n["posts"] == 4:
+            return 503, b"down"
+        return post(url, body, headers)
+
+    sh.post = flaky
+    rep = sh.sync_once()
+    assert rep.errors and "503" in rep.errors[0]
+    assert len(seen) == 3 and seen == sorted(seen)
+    assert st.cursor(BUCKET) == seen[-1]
+    newest = max(datetime.fromisoformat(e["ts_end"]) for c in post.calls for e in c[1]["events"])
+    assert st.cursor(BUCKET) == newest  # nothing past the last fully shipped span
+
+
+def test_first_pull_from_epoch_widens_over_empty_spans(tmp_path):
+    sh, st, post, aw = make(tmp_path, [ev(1, 60)])
+    sh.sync_once()
+    assert len(aw.calls) < 120 and aw.calls[0][1] == datetime(1970, 1, 1, tzinfo=UTC)
+    assert [e["source_event_id"] for e in post.calls[0][1]["events"]] == [1]

@@ -258,3 +258,26 @@ def test_cli_import_errors_exit_1(tmp_path, capsys):
     argv = [*common, "compare-activity-logger", missing, "--date", "2026-04-01", "--tz", "UTC"]
     assert cli.main(argv) == 1
     assert "error:" in capsys.readouterr().err
+
+
+def test_importer_redacts_window_titles_like_live_mapping(tmp_path):
+    (tmp_path / "token").write_text("sekrit", encoding="utf-8")
+    cfg = Config(ingest_url="https://i.example", device="pc", token_file=tmp_path / "token")
+    sent: list[dict] = []
+
+    def post(url, body, headers):
+        sent.extend(json.loads(body)["events"])
+        return 200, b"{}"
+
+    db = tmp_path / "r.db"
+    make_db(
+        db,
+        [
+            row(1, T0, T0 + 5, title="Chase.com - Firefox"),
+            row(2, T0, T0 + 5, title="News - Private Browsing"),
+            row(3, T0, T0 + 5, title="notes.txt"),
+        ],
+    )
+    import_activity_logger(db, "pc", cfg, post)
+    titles = {e["source_event_id"]: e["title"] for e in sent}
+    assert titles == {1: None, 2: None, 3: "notes.txt"}

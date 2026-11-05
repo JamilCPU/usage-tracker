@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
@@ -96,6 +96,12 @@ def test_config_idle_apps(tmp_path):
     cfg.write_text(base, encoding="utf-8")
     assert Config.load(cfg).idle_apps == list(IDLE_APPS)
     cfg.write_text(base + 'idle_apps = ["Foo.exe"]\n', encoding="utf-8")
+    extended = Config.load(cfg).idle_apps
+    assert extended[: len(IDLE_APPS)] == list(IDLE_APPS) and extended[-1] == "Foo.exe"
+    cfg.write_text(base + 'idle_apps = ["LockApp", "Foo.exe"]\n', encoding="utf-8")
+    assert Config.load(cfg).idle_apps.count("lockapp.exe") == 1  # no duplicate of a default
+    assert "LockApp" not in Config.load(cfg).idle_apps
+    cfg.write_text(base + 'idle_apps = ["Foo.exe"]\nidle_apps_replace = true\n', encoding="utf-8")
     assert Config.load(cfg).idle_apps == ["Foo.exe"]
     cfg.write_text(base + "idle_apps = [1]\n", encoding="utf-8")
     with pytest.raises(ConfigError):
@@ -109,7 +115,6 @@ def test_import_until_cutoff(tmp_path):
     rep = import_activity_logger(db, "pc", cfg, post, until=until)
     ids = [e["source_event_id"] for c in post.calls for e in c[1]["events"]]
     assert ids == [1, 2, 3] and rep.read == 3
-    assert until - timedelta(seconds=1) < until
 
 
 def test_cli_until_naive_rejected_and_dry_run_shows_cutoff(tmp_path, capsys):
@@ -125,4 +130,3 @@ def test_cli_until_naive_rejected_and_dry_run_shows_cutoff(tmp_path, capsys):
     code = cli.main([*common, "--dry-run", "--until", "2026-03-30T13:00:00+00:00"])
     out = capsys.readouterr().out
     assert code == 0 and "until=2026-03-30T13:00:00+00:00" in out and "read=1" in out
-    json.dumps({})

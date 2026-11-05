@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from usage_sync.aw import AwClient
 from usage_sync.config import Config
-from usage_sync.mapping import IDLE_APPS, _clean, bucket_kind, is_idle_app, to_event
+from usage_sync.mapping import IDLE_APPS, _clean, bucket_kind, is_idle_app, norm_app, to_event
 from usage_sync.redact import Redactor
 from usage_sync.shipper import Post, post_batch
 
@@ -105,7 +105,7 @@ def import_activity_logger(
     dry_run: bool = False,
     until: datetime | None = None,
 ) -> ImportReport:
-    redactor = redactor or Redactor(cfg.redact_apps, cfg.redact_domains)
+    redactor = redactor or Redactor(cfg.redact_apps, cfg.redact_domains, cfg.redact_title_markers)
     report = ImportReport()
     token = "" if dry_run else cfg.token_file.read_text(encoding="utf-8").strip()
     batch_cfg = replace(cfg, device=device)
@@ -154,11 +154,6 @@ def _flush(
     return True
 
 
-def _norm_app(app: str | None) -> str:
-    name = (app or "(unknown)").strip().lower()
-    return name[:-4] if name.endswith(".exe") else name
-
-
 def _zone(tz: str) -> tzinfo:
     if tz.upper() == "UTC":
         return UTC
@@ -172,7 +167,9 @@ def _clip(ev: dict, lo: datetime, hi: datetime) -> float:
     return max(0.0, (min(ev["ts_end"], hi) - max(ev["ts_start"], lo)).total_seconds())
 
 
-def compare_activity_logger(db_path: Path, day: date, aw: AwClient, tz: str) -> CompareReport:
+def compare_activity_logger(
+    db_path: Path, day: date, aw: AwClient, tz: str, idle_apps=IDLE_APPS
+) -> CompareReport:
     zone = _zone(tz)
     lo = datetime(day.year, day.month, day.day, tzinfo=zone).astimezone(UTC)
     nxt = day + timedelta(days=1)
@@ -186,18 +183,18 @@ def compare_activity_logger(db_path: Path, day: date, aw: AwClient, tz: str) -> 
             "COALESCE(end_time, start_time + COALESCE(duration_seconds, 0)) > ?"
         )
         for row in con.execute(query, (hi.timestamp(), lo.timestamp())):
-            event = _row_event(row)
+            event = _row_event(row, idle_apps)
             if event is not None and not event["idle"]:
-                old[_norm_app(event["app"])] += _clip(event, lo, hi)
+                old[norm_app(event["app"] or "(unknown)")] += _clip(event, lo, hi)
     finally:
         con.close()
     for bucket_id, bucket in aw.buckets().items():
         if bucket_kind(bucket) != "window":
             continue
         for raw in aw.events(bucket_id, lo, hi, FETCH_LIMIT):
-            event = to_event(bucket_id, "window", raw)
+            event = to_event(bucket_id, "window", raw, idle_apps)
             if event is not None and not event["idle"]:
-                new[_norm_app(event["app"])] += _clip(event, lo, hi)
+                new[norm_app(event["app"] or "(unknown)")] += _clip(event, lo, hi)
     apps = sorted(set(old) | set(new), key=lambda a: (-old.get(a, 0.0), -new.get(a, 0.0), a))
     rows = [(a, old.get(a, 0.0), new.get(a, 0.0)) for a in apps]
     old_total = sum(old.values())

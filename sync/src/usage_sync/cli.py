@@ -221,7 +221,7 @@ def _cmd_import(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_compare(cfg: Config, args: argparse.Namespace) -> int:
     try:
         aw = AwClient(cfg.aw_url, cfg.aw_timeout_seconds)
-        report = compare_activity_logger(args.sqlite_path, args.date, aw, args.tz)
+        report = compare_activity_logger(args.sqlite_path, args.date, aw, args.tz, cfg.idle_apps)
     except (ValueError, AwError, OSError, sqlite3.Error) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
