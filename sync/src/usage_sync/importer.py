@@ -38,10 +38,8 @@ class CompareReport:
 
     @property
     def passed(self) -> bool:
-        top = self.rows[:TOP_N]
-        return bool(top) and all(
-            old > 0 and abs(new - old) / old <= TOLERANCE for _, old, new in top
-        )
+        top = [r for r in self.rows if r[1] > 0][:TOP_N]
+        return bool(top) and all(abs(new - old) / old <= TOLERANCE for _, old, new in top)
 
 
 def _utc(seconds: float) -> datetime:
@@ -49,6 +47,13 @@ def _utc(seconds: float) -> datetime:
 
 
 def _row_event(row: Mapping | sqlite3.Row) -> dict | None:
+    try:
+        return _build_event(row)
+    except (ValueError, OverflowError, OSError, TypeError):
+        return None  # NaN / out-of-range timestamps: skipped and counted
+
+
+def _build_event(row: Mapping | sqlite3.Row) -> dict | None:
     start = row["start_time"]
     end = row["end_time"]
     if end is None:

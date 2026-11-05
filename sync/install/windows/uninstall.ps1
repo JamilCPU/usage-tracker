@@ -15,7 +15,14 @@ foreach ($name in 'usage-sync', 'ActivityWatch') {
         Write-Host "task $name not present"
     }
 }
-Get-Process -Name 'pythonw', 'aw-qt', 'aw-server', 'aw-watcher-afk', 'aw-watcher-window' -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -like "$env:LOCALAPPDATA\Programs\*" } |
-    Stop-Process -Force
+# only processes that run from our own install directories
+$dirs = @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\usage-sync'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\activitywatch')
+)
+foreach ($d in $dirs) {
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($d + '\', [StringComparison]::OrdinalIgnoreCase) } |
+        Stop-Process -Force
+}
 Write-Host 'Installed files, config, token and ActivityWatch data were left in place.'

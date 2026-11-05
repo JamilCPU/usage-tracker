@@ -227,3 +227,34 @@ def test_cli_import_and_compare_wiring(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(cli, "AwClient", lambda url, timeout=10: FakeAw([]))
     code = cli.main(argv)
     assert code == 0 and "WARN" in capsys.readouterr().out
+
+
+def test_bad_start_time_is_skipped_not_fatal(tmp_path):
+    db, cfg, post = tmp_path / "b.db", make_cfg(tmp_path), FakePost()
+    make_db(db, [row(1, 1e30, 1e30 + 5), row(2, T0, T0 + 5)])
+    rep = import_activity_logger(db, "pc", cfg, post)
+    assert rep.read == 2 and rep.shipped == 1 and rep.skipped == 1
+
+
+def test_compare_pass_ignores_zero_old_apps():
+    from usage_sync.importer import CompareReport
+
+    ok = CompareReport(rows=[("a", 100, 105), ("only_new", 0, 50)], ratio=1)
+    assert ok.passed
+
+
+def test_cli_import_errors_exit_1(tmp_path, capsys):
+    cfg_path = tmp_path / "cfg" / "config.toml"
+    cfg_path.parent.mkdir()
+    cfg_path.write_text('ingest_url = "https://ingest.example"\ndevice = "pc"\n', encoding="utf-8")
+    db = tmp_path / "w.db"
+    make_db(db, [row(1, T0, T0 + 5)])
+    common = ["--config", str(cfg_path)]
+    assert cli.main([*common, "import-activity-logger", str(db), "--device", "g"]) == 1
+    assert "error:" in capsys.readouterr().err  # missing token file
+    missing = str(tmp_path / "nope.db")
+    assert cli.main([*common, "import-activity-logger", missing, "--device", "g", "--dry-run"]) == 1
+    assert "error:" in capsys.readouterr().err
+    argv = [*common, "compare-activity-logger", missing, "--date", "2026-04-01", "--tz", "UTC"]
+    assert cli.main(argv) == 1
+    assert "error:" in capsys.readouterr().err

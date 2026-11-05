@@ -121,3 +121,35 @@ def test_run_loops_until_stop(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(cli, "AwClient", FakeAw)
     code, _, _ = run(["--config", str(cfg), "run"], capsys)
     assert code == 0 and seen["stop"].is_set()
+
+
+def test_module_entry_point_runs():
+    import subprocess
+
+    res = subprocess.run(
+        [sys.executable, "-m", "usage_sync", "--help"], capture_output=True, text=True, timeout=60
+    )
+    assert res.returncode == 0 and "usage-sync" in res.stdout
+
+
+def test_logs_to_rotating_file_without_stderr(tmp_path, capsys, monkeypatch):
+    import logging
+
+    cfg = write_cfg(tmp_path)
+    monkeypatch.setattr(cli, "AwClient", FakeAw)
+    monkeypatch.setattr(sys, "stderr", None)
+    root = logging.getLogger()
+    before = list(root.handlers)
+    try:
+        code = cli.main(["--config", str(cfg), "status"])
+        logging.getLogger("usage_sync").info("hello-from-test")
+        for h in root.handlers:
+            h.flush()
+    finally:
+        for h in root.handlers[:]:
+            if h not in before:
+                root.removeHandler(h)
+                h.close()
+    out = capsys.readouterr().out
+    assert code == 0 and "log file:" in out
+    assert "hello-from-test" in (cfg.parent / "usage-sync.log").read_text(encoding="utf-8")

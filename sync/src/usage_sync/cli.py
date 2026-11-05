@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import logging.handlers
+import os
 import signal
+import sqlite3
 import sys
 import threading
 from datetime import UTC, date, datetime
@@ -33,6 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=default_config_dir() / "config.toml",
         help="path to config.toml (default: %(default)s)",
     )
+    parser.add_argument("--log-file", type=Path, help="log to this rotating file")
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -56,7 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     cmp_ = sub.add_parser("compare-activity-logger", help="compare old history with ActivityWatch")
     cmp_.add_argument("sqlite_path", type=Path)
     cmp_.add_argument("--date", required=True, type=date.fromisoformat, help="YYYY-MM-DD")
-    cmp_.add_argument("--tz", default="America/Chicago")
+    cmp_.add_argument("--tz", default=os.environ.get("USAGE_TZ") or "America/Chicago")
     return parser
 
 
@@ -81,8 +85,30 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_status(cfg: Config, path: Path) -> int:
+def _log_path(args: argparse.Namespace) -> Path:
+    return args.log_file or args.config.parent / "usage-sync.log"
+
+
+def _setup_logging(args: argparse.Namespace) -> None:
+    level = logging.DEBUG if args.verbose else logging.INFO
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    if args.log_file or sys.stderr is None:  # pythonw has no stderr
+        path = _log_path(args)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            path, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter(fmt))
+        root = logging.getLogger()
+        root.addHandler(handler)
+        root.setLevel(level)
+    else:
+        logging.basicConfig(level=level, format=fmt, stream=sys.stderr)
+
+
+def _cmd_status(cfg: Config, path: Path, log_path: Path | None = None) -> int:
     print(f"config:     {path}")
+    print(f"log file:   {log_path or path.parent / 'usage-sync.log'}")
     print(f"device:     {cfg.device}")
     print(f"ingest url: {cfg.ingest_url}")
     present = cfg.token_file.is_file()
@@ -140,14 +166,18 @@ def _cmd_run(cfg: Config, path: Path) -> int:
 
 
 def _cmd_import(cfg: Config, args: argparse.Namespace) -> int:
-    report = import_activity_logger(
-        args.sqlite_path,
-        args.device,
-        cfg,
-        urllib_post(cfg.ca_file),
-        batch_size=args.batch_size,
-        dry_run=args.dry_run,
-    )
+    try:
+        report = import_activity_logger(
+            args.sqlite_path,
+            args.device,
+            cfg,
+            urllib_post(cfg.ca_file),
+            batch_size=args.batch_size,
+            dry_run=args.dry_run,
+        )
+    except (sqlite3.Error, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     print_import_report(report, args.dry_run)
     for err in report.errors:
         print(f"error: {err}", file=sys.stderr)
@@ -157,7 +187,7 @@ def _cmd_import(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_compare(cfg: Config, args: argparse.Namespace) -> int:
     try:
         report = compare_activity_logger(args.sqlite_path, args.date, AwClient(cfg.aw_url), args.tz)
-    except (ValueError, AwError, OSError) as exc:
+    except (ValueError, AwError, OSError, sqlite3.Error) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print_compare_report(report, args.date)
@@ -166,11 +196,7 @@ def _cmd_compare(cfg: Config, args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        stream=sys.stderr,
-    )
+    _setup_logging(args)
     if args.command == "init":
         return _cmd_init(args)
     try:
@@ -182,7 +208,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_import(cfg, args)
     if args.command == "compare-activity-logger":
         return _cmd_compare(cfg, args)
-    handlers = {"status": _cmd_status, "once": _cmd_once, "run": _cmd_run}
+    if args.command == "status":
+        return _cmd_status(cfg, args.config, _log_path(args))
+    handlers = {"once": _cmd_once, "run": _cmd_run}
     return handlers[args.command](cfg, args.config)
 
 
