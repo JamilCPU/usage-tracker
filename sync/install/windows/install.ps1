@@ -22,7 +22,7 @@ param(
     [string]$NodeSsh,
     [string]$PythonPath,
     [string]$AwVersion,
-    [string]$RepoPath = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
+    [string]$RepoPath = '',
     [switch]$Force,
     [switch]$NoStart,
     [switch]$DryRun
@@ -31,6 +31,8 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $FallbackAwVersion = 'v0.13.2'   # last Windows build in the 0.13 line
+# $PSScriptRoot is empty while param() defaults are evaluated under `powershell -File` (5.1)
+if (-not $RepoPath) { $RepoPath = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path }
 
 $awDir = Join-Path $env:LOCALAPPDATA 'Programs\activitywatch'
 $awExe = Join-Path $awDir 'aw-qt.exe'
@@ -52,80 +54,147 @@ function Step([string]$text) {
 function Get-AwRelease {
     # Returns @{ Tag; Url } for the requested (or newest) release that has a Windows zip.
     $headers = @{ 'User-Agent' = 'usage-sync-installer' }
-    if ($AwVersion) {
-        $releases = @(Invoke-RestMethod -Headers $headers -Uri "$apiBase/tags/$AwVersion")
-    } else {
-        try {
-            $releases = @(Invoke-RestMethod -Headers $headers -Uri "${apiBase}?per_page=15")
-        } catch {
-            Write-Warning "release lookup failed ($($_.Exception.Message)); using $FallbackAwVersion"
-            $releases = @(Invoke-RestMethod -Headers $headers -Uri "$apiBase/tags/$FallbackAwVersion")
-        }
+    # Windows PowerShell 5.1 returns a JSON array as ONE object, so always enumerate explicitly.
+    function Get-Releases([string]$uri) {
+        $resp = Invoke-RestMethod -Headers $headers -Uri $uri
+        return @($resp | ForEach-Object { $_ })
     }
-    foreach ($r in $releases) {
-        if ($r.prerelease -and -not $AwVersion) { continue }
-        foreach ($a in $r.assets) {
-            if ($a.name -like 'activitywatch-v*-windows-x86_64.zip') {
-                return @{ Tag = $r.tag_name; Url = $a.browser_download_url }
+    function Find-WindowsZip($releases, [bool]$allowPre) {
+        foreach ($r in $releases) {
+            if (($r.prerelease -eq $true) -and -not $allowPre) { continue }
+            foreach ($a in @($r.assets)) {
+                if ($a.name -like 'activitywatch-v*-windows-x86_64.zip') {
+                    return @{ Tag = $r.tag_name; Url = $a.browser_download_url }
+                }
             }
         }
+        return $null
     }
-    throw 'no ActivityWatch release with a Windows zip asset was found'
+    if ($AwVersion) {
+        $found = Find-WindowsZip (Get-Releases "$apiBase/tags/$AwVersion") $true
+        if ($found) { return $found }
+        throw "ActivityWatch $AwVersion has no Windows zip asset"
+    }
+    $found = $null
+    try {
+        $found = Find-WindowsZip (Get-Releases "${apiBase}?per_page=15") $false
+    } catch {
+        Write-Warning "release lookup failed ($($_.Exception.Message))"
+    }
+    if (-not $found) {
+        Write-Warning "no release with a Windows zip found; using $FallbackAwVersion"
+        $found = Find-WindowsZip (Get-Releases "$apiBase/tags/$FallbackAwVersion") $true
+    }
+    if (-not $found) { throw 'no ActivityWatch release with a Windows zip asset was found' }
+    return $found
+}
+
+function Invoke-Native {
+    # Run a native command without letting stderr output terminate the script; returns Out + Code.
+    param([string]$Exe, [string[]]$ArgList)
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $all = @(& $Exe @ArgList 2>&1)
+        $code = $LASTEXITCODE
+    } catch {
+        $all = @()
+        $code = -1
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+    $out = @($all | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
+    return @{ Out = $out; Code = $code }
 }
 
 function Find-Python {
-    # Returns an argv array (exe first) for a Python >= 3.11; fails with a clear message.
-    # Order: -PythonPath, uv-managed/known interpreters (3.11-3.13), py -3, python.
-    # Microsoft Store Python is rejected: it virtualizes %LOCALAPPDATA%, so the shim could not
-    # see the config, token and CA that this script writes there.
+    # Returns an argv array (exe first) for a real CPython 3.11-3.13; fails with a clear message.
+    # Order: -PythonPath, uv-managed, uv system, py -3, python. Rejected: Microsoft Store Python
+    # (it virtualizes %LOCALAPPDATA%, so the shim could not see the config, token and CA this
+    # script writes there) and anything inside a virtual environment (e.g. a project .venv).
     $problems = @()
     $uv = Get-Command uv -ErrorAction SilentlyContinue
-    $tried = 0
     foreach ($round in 1, 2) {
         $cands = @()
         if ($PythonPath) { $cands += , @($PythonPath) }
         if ($uv) {
-            $found = @(& $uv.Source python find '>=3.11,<3.14' 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $found.Count -gt 0 -and $found[0]) { $cands += , @("$($found[0])".Trim()) }
+            foreach ($mode in '--managed-python', '--system') {
+                $r = Invoke-Native $uv.Source @('python', 'find', '--no-project', $mode, '>=3.11,<3.14')
+                if ($r.Code -eq 0 -and $r.Out.Count -gt 0 -and $r.Out[0].Trim()) { $cands += , @($r.Out[0].Trim()) }
+            }
         }
-        if ((Get-Command py -ErrorAction SilentlyContinue)) { $cands += , @('py', '-3') }
-        if ((Get-Command python -ErrorAction SilentlyContinue)) { $cands += , @('python') }
+        if (Get-Command py -ErrorAction SilentlyContinue) { $cands += , @('py', '-3') }
+        if (Get-Command python -ErrorAction SilentlyContinue) { $cands += , @('python') }
         foreach ($cand in $cands) {
             $exe = $cand[0]
             $rest = @($cand | Select-Object -Skip 1)
             $label = ($cand -join ' ')
-            $lines = @()
-            try {
-                $lines = @(& $exe @rest -c 'import sys; print(sys.version_info[:2] >= (3,11)); print(sys.base_prefix)' 2>$null)
-            } catch {
-                $problems += "$label failed to run"
-                continue
-            }
-            if ($LASTEXITCODE -ne 0 -or $lines.Count -lt 2) {
+            $probe = 'import sys; print(sys.version_info[:2] >= (3,11) and sys.version_info[:2] < (3,14)); print(sys.base_prefix); print(sys.prefix != sys.base_prefix)'
+            $r = Invoke-Native $exe (@($rest) + @('-c', $probe))
+            if ($r.Code -ne 0 -or $r.Out.Count -lt 3) {
                 $problems += "$label is not a working Python (Microsoft Store alias?)"
                 continue
             }
-            $prefix = "$($lines[1])"
             $resolved = (Get-Command $exe -ErrorAction SilentlyContinue).Source
-            if ($prefix -like '*\WindowsApps\*' -or $resolved -like '*\WindowsApps\*') {
+            if ($r.Out[1] -like '*\WindowsApps\*' -or $resolved -like '*\WindowsApps\*') {
                 $problems += "$label is Microsoft Store Python (virtualizes AppData, so the shim could not read its config/token)"
                 continue
             }
-            if ("$($lines[0])" -ne 'True') {
-                $problems += "$label is older than Python 3.11"
+            if ($r.Out[2] -eq 'True') {
+                $problems += "$label is inside a virtual environment"
+                continue
+            }
+            if ($r.Out[0] -ne 'True') {
+                $problems += "$label is not Python 3.11-3.13"
                 continue
             }
             return , (@($exe) + $rest)
         }
         if ($round -eq 1 -and $uv -and -not $DryRun) {
             Write-Host 'no suitable Python found; installing Python 3.12 with uv (user-level)'
-            & $uv.Source python install 3.12
+            $r = Invoke-Native $uv.Source @('python', 'install', '3.12')
+            if ($r.Code -ne 0) { $problems += "uv python install 3.12 failed (exit $($r.Code))"; break }
             continue
         }
         break
     }
     $detail = $problems -join '; '
     throw "A real Python 3.11-3.13 is required (not Microsoft Store Python). Either install Python from python.org (and re-run), install uv (https://docs.astral.sh/uv/) so this script can fetch one, or pass -PythonPath. $detail"
+}
+
+function Test-Packaged {
+    # True when this process has Windows package identity (e.g. a terminal inside an MSIX app).
+    if (-not ('UsageSync.Pkg' -as [type])) {
+        Add-Type -Namespace UsageSync -Name Pkg -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern int GetCurrentPackageFullName(ref int length, System.Text.StringBuilder name);
+'@
+    }
+    $len = 0
+    $rc = [UsageSync.Pkg]::GetCurrentPackageFullName([ref]$len, $null)
+    return ($rc -ne 15700)   # 15700 = APPMODEL_ERROR_NO_PACKAGE
+}
+
+function New-OutsideDirectory([string]$Dir) {
+    # A packaged process gets new top-level %LOCALAPPDATA% folders redirected to private storage,
+    # invisible to Task Scheduler. Create the directory from a process outside the package.
+    $name = 'usage-sync-mkdir'
+    $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c if not exist `"$Dir`" mkdir `"$Dir`""
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+    try {
+        Register-ScheduledTask -TaskName $name -Action $action -Principal $principal -Force | Out-Null
+        Start-ScheduledTask -TaskName $name
+        for ($n = 0; $n -lt 20; $n++) {
+            Start-Sleep -Milliseconds 500
+            if ((Get-ScheduledTask -TaskName $name).State -ne 'Running' -and $n -ge 1) { break }
+        }
+    } finally {
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    $redirected = Test-Path (Join-Path $env:LOCALAPPDATA 'Packages\*\LocalCache\Local\usage-sync')
+    if ($redirected -or -not (Test-Path $Dir)) {
+        throw "$Dir is still redirected to a package's private storage; re-run from a normal PowerShell window"
+    }
 }
 
 function Get-ProcessesUnder([string[]]$Dirs) {
@@ -159,6 +228,16 @@ if ($IngestConnectHost -and $IngestConnectHost -notmatch '^[A-Za-z0-9.\-:\[\]]+$
 }
 $py = Find-Python
 Step "python: $($py -join ' ')"
+
+# packaged-process pitfall: create %LOCALAPPDATA%\usage-sync from outside the package
+if (Test-Packaged) {
+    if ($DryRun) {
+        Step "running inside a packaged app: would create $cfgDir through a one-shot scheduled task (cmd /c mkdir), then verify it is not redirected"
+    } else {
+        Write-Warning 'running inside a packaged app (new %LOCALAPPDATA% folders are redirected); creating the data directory from outside the package'
+        New-OutsideDirectory $cfgDir
+    }
+}
 
 # 1. ActivityWatch
 if ((Test-Path $awExe) -and -not $Force -and -not $AwVersion) {
@@ -223,7 +302,10 @@ if ((Test-Path $cfgFile) -and -not $Force) {
         }
     }
 } else {
-    Step "write $cfgFile via usage-sync init (device=$Device, ingest_url=$IngestUrl)"
+    $extra = ''
+    if ($CaFile) { $extra += ", ca_file=$CaFile" }
+    if ($IngestConnectHost) { $extra += ", ingest_connect_host=$IngestConnectHost" }
+    Step "write $cfgFile via usage-sync init (device=$Device, ingest_url=$IngestUrl$extra)"
     if (-not $DryRun) {
         $initArgs = @('--config', $cfgFile, 'init', '--device', $Device, '--ingest-url', $IngestUrl, '--force')
         if ($CaFile) { $initArgs += @('--ca-file', $CaFile) }
@@ -266,9 +348,28 @@ if ($NoStart) {
     if (-not $DryRun) {
         Start-ScheduledTask -TaskName 'ActivityWatch'
         Start-ScheduledTask -TaskName 'usage-sync'
-        Start-Sleep -Seconds 20
+        # wait for the shim task to be Running; surface a failed start instead of hiding it
+        $state = ''
+        for ($n = 0; $n -lt 15; $n++) {
+            $state = (Get-ScheduledTask -TaskName 'usage-sync').State
+            if ($state -eq 'Running') { break }
+            Start-Sleep -Seconds 1
+        }
+        $result = (Get-ScheduledTaskInfo -TaskName 'usage-sync').LastTaskResult
+        if ($state -ne 'Running' -and $result -ne 0 -and $result -ne 267009) {
+            Write-Host ('usage-sync task failed to start: result 0x{0:X8}' -f ([uint32]([int64]$result -band 0xFFFFFFFF)))
+            $logFile = Join-Path $cfgDir 'usage-sync.log'
+            if (Test-Path $logFile) { Get-Content -Path $logFile -Tail 20 }
+            exit 1
+        }
+        if ($state -ne 'Running') { Write-Warning "usage-sync task state is '$state' (last result $result)" }
+        Start-Sleep -Seconds 5
         & $venvCli --config $cfgFile status
         Write-Host 'If ActivityWatch shows as unreachable above, it may still be starting; re-run: usage-sync status'
+        # status does not exercise the ingest path, so ship once for real
+        $once = Invoke-Native $venvPy @('-m', 'usage_sync', '--config', $cfgFile, 'once')
+        $once.Out | ForEach-Object { Write-Host $_ }
+        if ($once.Code -ne 0) { Write-Warning "usage-sync once exited with code $($once.Code); see the log at $(Join-Path $cfgDir 'usage-sync.log')" }
     }
 }
 Write-Host 'done.'

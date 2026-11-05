@@ -158,7 +158,7 @@ class Shipper:
         by_key: dict[tuple, dict] = {}
         for item in raw:
             try:
-                ev = to_event(bucket_id, kind, item)
+                ev = to_event(bucket_id, kind, item, self.cfg.idle_apps)
                 if ev is None:
                     continue
                 if ev["ts_end"] < ev["ts_start"]:

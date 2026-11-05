@@ -218,6 +218,9 @@ def test_install_script_bash_syntax():
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash not available")
-    script = Path(__file__).parents[1] / "install" / "linux" / "install-sync.sh"
-    result = subprocess.run([bash, "-n", str(script)], capture_output=True, text=True, check=False)
+    root = Path(__file__).parents[1]
+    script = (root / "install" / "linux" / "install-sync.sh").relative_to(root)
+    result = subprocess.run(
+        [bash, "-n", script.as_posix()], capture_output=True, text=True, check=False, cwd=root
+    )
     assert result.returncode == 0, result.stderr

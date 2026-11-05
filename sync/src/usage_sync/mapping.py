@@ -31,7 +31,31 @@ def _clean(value):
     return value.replace("\x00", "") if isinstance(value, str) else value
 
 
-def to_event(bucket_id: str, kind: str, aw_event: dict) -> dict | None:
+# Lock-screen / logon processes: the focused "app" while the machine is locked, not usage.
+IDLE_APPS = (
+    "lockapp.exe",
+    "logonui.exe",
+    "loginwindow",
+    "gnome-screensaver",
+    "gdm-x-session",
+    "kscreenlocker_greet",
+)
+
+
+def _norm_app(app: str) -> str:
+    low = app.strip().lower()
+    return low[:-4] if low.endswith(".exe") else low
+
+
+def is_idle_app(app: str | None, idle_apps) -> bool:
+    """Case-insensitive exact match on the app name, with or without a trailing .exe."""
+    if not app:
+        return False
+    wanted = {_norm_app(a) for a in idle_apps}
+    return _norm_app(app) in wanted
+
+
+def to_event(bucket_id: str, kind: str, aw_event: dict, idle_apps=IDLE_APPS) -> dict | None:
     data = aw_event.get("data") or {}
     ts_start = _parse_ts(aw_event["timestamp"])
     ts_end = ts_start + timedelta(seconds=float(aw_event.get("duration") or 0))
@@ -41,6 +65,8 @@ def to_event(bucket_id: str, kind: str, aw_event: dict) -> dict | None:
     if kind == "window":
         app = data.get("package") or data.get("app") or None
         title = data.get("title")
+        if is_idle_app(app, idle_apps):
+            idle, title = True, None
     elif kind == "afk":
         idle = data.get("status") == "afk"
     elif kind == "web":

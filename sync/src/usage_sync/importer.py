@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from usage_sync.aw import AwClient
 from usage_sync.config import Config
-from usage_sync.mapping import _clean, bucket_kind, to_event
+from usage_sync.mapping import IDLE_APPS, _clean, bucket_kind, is_idle_app, to_event
 from usage_sync.redact import Redactor
 from usage_sync.shipper import Post, post_batch
 
@@ -46,14 +46,14 @@ def _utc(seconds: float) -> datetime:
     return datetime.fromtimestamp(seconds, UTC)
 
 
-def _row_event(row: Mapping | sqlite3.Row) -> dict | None:
+def _row_event(row: Mapping | sqlite3.Row, idle_apps=IDLE_APPS) -> dict | None:
     try:
-        return _build_event(row)
+        return _build_event(row, idle_apps)
     except (ValueError, OverflowError, OSError, TypeError):
         return None  # NaN / out-of-range timestamps: skipped and counted
 
 
-def _build_event(row: Mapping | sqlite3.Row) -> dict | None:
+def _build_event(row: Mapping | sqlite3.Row, idle_apps) -> dict | None:
     start = row["start_time"]
     end = row["end_time"]
     if end is None:
@@ -62,25 +62,29 @@ def _build_event(row: Mapping | sqlite3.Row) -> dict | None:
         end = start + row["duration_seconds"]
     if end < start:
         return None
-    idle = bool(row["is_idle"])
+    afk = bool(row["is_idle"])
+    app = None if afk else _clean(row["process_name"] or row["app_name"])
+    lock_screen = is_idle_app(app, idle_apps)
     return {
         "ts_start": _utc(start),
         "ts_end": _utc(end),
-        "kind": "afk" if idle else "window",
-        "app": None if idle else _clean(row["process_name"] or row["app_name"]),
-        "title": None if idle else _clean(row["window_title"]),
+        "kind": "afk" if afk else "window",
+        "app": app,
+        "title": None if afk or lock_screen else _clean(row["window_title"]),
         "url": None,
         "domain": None,
-        "idle": idle,
+        "idle": afk or lock_screen,
         "source_bucket": SOURCE_BUCKET,
         "source_event_id": row["id"],
     }
 
 
-def rows_to_events(rows: Iterable[sqlite3.Row | Mapping], device: str) -> Iterator[dict]:
+def rows_to_events(
+    rows: Iterable[sqlite3.Row | Mapping], device: str, idle_apps=IDLE_APPS
+) -> Iterator[dict]:
     """Yield shim-shaped events; open sessions without a duration and bad rows are skipped."""
     for row in rows:
-        event = _row_event(row)
+        event = _row_event(row, idle_apps)
         if event is not None:
             yield event
 
@@ -99,6 +103,7 @@ def import_activity_logger(
     batch_size: int = 1000,
     redactor: Redactor | None = None,
     dry_run: bool = False,
+    until: datetime | None = None,
 ) -> ImportReport:
     redactor = redactor or Redactor(cfg.redact_apps, cfg.redact_domains)
     report = ImportReport()
@@ -107,10 +112,17 @@ def import_activity_logger(
     kept = 0
     batch: list[dict] = []
     con = _open_ro(db_path)
+    if until is not None and until.tzinfo is None:
+        raise ValueError("until must be timezone-aware")
+    query = "SELECT * FROM sessions ORDER BY start_time, id"
+    params: tuple = ()
+    if until is not None:
+        query = "SELECT * FROM sessions WHERE start_time < ? ORDER BY start_time, id"
+        params = (until.timestamp(),)
     try:
-        for row in con.execute("SELECT * FROM sessions ORDER BY start_time, id"):
+        for row in con.execute(query, params):
             report.read += 1
-            event = _row_event(row)
+            event = _row_event(row, cfg.idle_apps)
             if event is None:
                 continue
             kept += 1
@@ -175,7 +187,7 @@ def compare_activity_logger(db_path: Path, day: date, aw: AwClient, tz: str) -> 
         )
         for row in con.execute(query, (hi.timestamp(), lo.timestamp())):
             event = _row_event(row)
-            if event is not None:
+            if event is not None and not event["idle"]:
                 old[_norm_app(event["app"])] += _clip(event, lo, hi)
     finally:
         con.close()
@@ -184,7 +196,7 @@ def compare_activity_logger(db_path: Path, day: date, aw: AwClient, tz: str) -> 
             continue
         for raw in aw.events(bucket_id, lo, hi, FETCH_LIMIT):
             event = to_event(bucket_id, "window", raw)
-            if event is not None:
+            if event is not None and not event["idle"]:
                 new[_norm_app(event["app"])] += _clip(event, lo, hi)
     apps = sorted(set(old) | set(new), key=lambda a: (-old.get(a, 0.0), -new.get(a, 0.0), a))
     rows = [(a, old.get(a, 0.0), new.get(a, 0.0)) for a in apps]
@@ -193,10 +205,11 @@ def compare_activity_logger(db_path: Path, day: date, aw: AwClient, tz: str) -> 
     return CompareReport(rows=rows, ratio=ratio)
 
 
-def print_import_report(report: ImportReport, dry_run: bool) -> None:
+def print_import_report(report: ImportReport, dry_run: bool, until: datetime | None = None) -> None:
     prefix = "dry run: " if dry_run else ""
+    cutoff = f"until={until.isoformat()} " if until else ""
     print(
-        f"{prefix}read={report.read} shipped={report.shipped} skipped={report.skipped} "
+        f"{prefix}{cutoff}read={report.read} shipped={report.shipped} skipped={report.skipped} "
         f"batches={report.batches} errors={len(report.errors)}"
     )
 
