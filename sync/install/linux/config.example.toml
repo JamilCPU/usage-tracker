@@ -4,6 +4,7 @@ device = "<device-name>"
 ingest_url = "https://ingest.example"
 # ca_file = "/home/<user>/lab-tls/lab-ca.pem"   # lab CA, if the ingest certificate is lab-signed
 # aw_url = "http://127.0.0.1:5600"
+# aw_timeout_seconds = 10   # raise for a remote (pull) ActivityWatch server
 # interval_seconds = 60
 # batch_size = 1000
 # settle_seconds = 120

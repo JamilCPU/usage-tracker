@@ -27,6 +27,7 @@ class Config:
     ingest_url: str
     device: str
     aw_url: str = "http://127.0.0.1:5600"
+    aw_timeout_seconds: int = 10
     interval_seconds: int = 60
     batch_size: int = 1000
     settle_seconds: int = 120
