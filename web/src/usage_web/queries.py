@@ -162,6 +162,7 @@ _EVENTS_SQL = """
 SELECT id, device, ts_start, ts_end, kind, app, title, url, domain
 FROM usage.events
 WHERE kind IN ('window', 'web')
+  AND NOT (kind = 'window' AND idle)
   AND (%(devices)s::text[] IS NULL OR device = ANY(%(devices)s))
   AND ts_end > %(t_from)s AND ts_start < %(t_to)s
   AND extract(hour FROM ts_start AT TIME ZONE %(tz)s) BETWEEN %(hour_from)s AND %(hour_to)s

@@ -8,8 +8,8 @@ import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
-from usage_sync.mapping import IDLE_APPS
-from usage_sync.redact import DEFAULT_APPS, DEFAULT_DOMAINS
+from usage_sync.mapping import IDLE_APPS, norm_app
+from usage_sync.redact import DEFAULT_APPS, DEFAULT_DOMAINS, PRIVATE_TITLE_MARKERS
 
 
 class ConfigError(Exception):
@@ -47,6 +47,16 @@ def parse_connect_host(value: object) -> tuple[str, int | None]:
     return host, int(port_text)
 
 
+MAX_BATCH_SIZE = 5000
+
+
+def _check_int(name: str, value: object, low: int, high: int | None) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < low:
+        raise ConfigError(f"{name} must be an integer >= {low}")
+    if high is not None and value > high:
+        raise ConfigError(f"{name} must be between {low} and {high}")
+
+
 @dataclass
 class Config:
     ingest_url: str
@@ -59,7 +69,9 @@ class Config:
     overlap_seconds: int = 3600
     redact_apps: list[str] = field(default_factory=lambda: list(DEFAULT_APPS))
     redact_domains: list[str] = field(default_factory=lambda: list(DEFAULT_DOMAINS))
+    redact_title_markers: list[str] = field(default_factory=lambda: list(PRIVATE_TITLE_MARKERS))
     idle_apps: list[str] = field(default_factory=lambda: list(IDLE_APPS))
+    idle_apps_replace: bool = False
     token_file: Path | None = None
     ca_file: str | None = None
     ingest_connect_host: str | None = None
@@ -69,6 +81,18 @@ class Config:
             isinstance(a, str) for a in self.idle_apps
         ):
             raise ConfigError("idle_apps must be a list of strings")
+        if not self.idle_apps_replace:
+            # User entries add to the built-in lock-screen apps instead of replacing them.
+            seen = {norm_app(a) for a in IDLE_APPS}
+            extra = [a for a in self.idle_apps if norm_app(a) not in seen]
+            self.idle_apps = [*IDLE_APPS, *extra]
+        for name, low, high in (
+            ("interval_seconds", 1, None),
+            ("batch_size", 1, MAX_BATCH_SIZE),
+            ("settle_seconds", 0, None),
+            ("overlap_seconds", 0, None),
+        ):
+            _check_int(name, getattr(self, name), low, high)
         timeout = self.aw_timeout_seconds
         if (
             isinstance(timeout, bool)

@@ -203,3 +203,13 @@ def test_timestamps_are_rendered_in_the_configured_zone(client, seed):
     assert bucket[11:13] == "10"  # the UI slices the local hour out of the string
     event = client.get("/api/events", params=RANGE).json()["rows"][0]
     assert event["ts_start"][11:16] == "10:00"
+
+
+@integration
+def test_events_excludes_idle_window_events(client, seed):
+    seed.add("desk-a", "window", local(9), local(9, 30), app="editor", title="t")
+    seed.add("desk-a", "window", local(10), local(10, 30), app="LockApp.exe", idle=True)
+    seed.add("desk-a", "web", local(11), local(11, 30), domain="example.org")
+    rows = client.get("/api/events", params=RANGE).json()["rows"]
+    assert sorted(r["kind"] for r in rows) == ["web", "window"]
+    assert "LockApp.exe" not in {r["app"] for r in rows}

@@ -1,4 +1,5 @@
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -7,7 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", populate_by_name=True)
 
-    USAGE_READER_DSN: str
+    # Only the server needs it; the migrate subcommand runs without a reader DSN.
+    USAGE_READER_DSN: str | None = None
     USAGE_OWNER_DSN: str | None = None
     USAGE_TZ: str = "America/Chicago"
     SESSION_SECRET: str
@@ -21,6 +23,14 @@ class Settings(BaseSettings):
     AUTH_MODE: Literal["oauth", "none"] = "oauth"
     MIGRATIONS_DIR: str = "/app/migrations"
     PORT: int = 8080
+
+    @model_validator(mode="after")
+    def _check_tz(self) -> "Settings":
+        try:
+            ZoneInfo(self.USAGE_TZ)
+        except (ZoneInfoNotFoundError, ValueError, OSError) as exc:
+            raise ValueError(f"USAGE_TZ {self.USAGE_TZ!r} is not a known IANA time zone") from exc
+        return self
 
     @model_validator(mode="after")
     def _check_auth(self) -> "Settings":

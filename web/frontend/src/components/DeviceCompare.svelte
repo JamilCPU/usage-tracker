@@ -9,6 +9,7 @@
 
 <section class="card" aria-label="Device comparison">
   <h2>Devices</h2>
+  <p class="muted caption">all hours, all apps</p>
   {#if totals.length === 0}
     <p class="empty">No usage in this range.</p>
   {:else}

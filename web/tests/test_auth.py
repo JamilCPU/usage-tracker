@@ -211,3 +211,28 @@ def test_connect_host_rewrites_url_but_keeps_host_and_sni(issuer):
     assert all(r.headers["host"] == "gateway.test" for r in seen)
     assert all(r.extensions["sni_hostname"] == "gateway.test" for r in seen)
     assert [r.url.path for r in seen] == ["/.well-known/oauth-authorization-server", "/token"]
+
+
+def test_callback_error_from_gateway_is_a_denied_page_not_state_mismatch(client):
+    start_login(client)
+    resp = client.get("/auth/callback?error=access_denied&state=whatever")
+    assert resp.status_code == 403
+    assert "denied" in resp.text.lower() and "mismatch" not in resp.text.lower()
+    assert "usage_session" not in resp.headers.get("set-cookie", "")
+
+
+def test_settings_reject_unknown_timezone():
+    with pytest.raises(ValueError, match="USAGE_TZ"):
+        make_settings(USAGE_TZ="Mars/Olympus")
+    assert make_settings(USAGE_TZ="UTC").USAGE_TZ == "UTC"
+
+
+def test_settings_load_without_reader_dsn_for_migrate():
+    settings = make_settings(USAGE_READER_DSN=None, USAGE_OWNER_DSN="postgresql://owner")
+    assert settings.USAGE_READER_DSN is None
+
+
+def test_serving_without_reader_dsn_fails_clearly():
+    app = create_app(make_settings(USAGE_READER_DSN=None))
+    with pytest.raises(RuntimeError, match="USAGE_READER_DSN"), TestClient(app):
+        pass

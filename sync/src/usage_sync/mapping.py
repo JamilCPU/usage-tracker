@@ -42,7 +42,7 @@ IDLE_APPS = (
 )
 
 
-def _norm_app(app: str) -> str:
+def norm_app(app: str) -> str:
     low = app.strip().lower()
     return low[:-4] if low.endswith(".exe") else low
 
@@ -51,8 +51,8 @@ def is_idle_app(app: str | None, idle_apps) -> bool:
     """Case-insensitive exact match on the app name, with or without a trailing .exe."""
     if not app:
         return False
-    wanted = {_norm_app(a) for a in idle_apps}
-    return _norm_app(app) in wanted
+    wanted = {norm_app(a) for a in idle_apps}
+    return norm_app(app) in wanted
 
 
 def to_event(bucket_id: str, kind: str, aw_event: dict, idle_apps=IDLE_APPS) -> dict | None:

@@ -8,7 +8,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner, URLSafeTimedSerializer
 
 from .config import Settings
@@ -19,6 +19,11 @@ OAUTH_COOKIE = "usage_oauth"
 SESSION_COOKIE = "usage_session"
 OAUTH_MAX_AGE = 600
 SESSION_MAX_AGE = 30 * 24 * 3600
+DENIED_HTML = (
+    "<!doctype html><title>Login denied</title>"
+    "<p>Login was denied by the identity provider.</p>"
+    '<p><a href="/auth/login">Try again</a></p>'
+)
 METADATA_PATH = "/.well-known/oauth-authorization-server"
 
 
@@ -129,8 +134,12 @@ def login(request: Request, next: str | None = None) -> RedirectResponse:
 
 
 @router.get("/callback")
-def callback(request: Request, code: str = "", state: str = "") -> RedirectResponse:
+def callback(request: Request, code: str = "", state: str = "", error: str = "") -> Response:
     settings = _settings(request)
+    if error:  # e.g. access_denied: the user (or gateway) refused the login
+        resp = HTMLResponse(DENIED_HTML, status_code=403)
+        resp.delete_cookie(OAUTH_COOKIE)
+        return resp
     raw = request.cookies.get(OAUTH_COOKIE)
     if not raw:
         raise HTTPException(400, "missing login state")

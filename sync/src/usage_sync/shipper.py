@@ -25,6 +25,9 @@ log = logging.getLogger(__name__)
 
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 FETCH_LIMIT = 20000
+INITIAL_SPAN = timedelta(days=1)
+MIN_SPAN = timedelta(minutes=5)
+MAX_SPAN = timedelta(days=366)
 MAX_BACKOFF = 600
 
 Post = Callable[[str, bytes, dict[str, str]], tuple[int, bytes]]
@@ -147,7 +150,7 @@ class Shipper:
         self.state = state
         self.post = post
         self.now = now
-        self.redactor = Redactor(cfg.redact_apps, cfg.redact_domains)
+        self.redactor = Redactor(cfg.redact_apps, cfg.redact_domains, cfg.redact_title_markers)
 
     def _token(self) -> str:
         return self.cfg.token_file.read_text(encoding="utf-8").strip()
@@ -173,16 +176,34 @@ class Shipper:
         events = [self.redactor.apply(e) for e in by_key.values()]
         return sorted(events, key=lambda e: e["ts_start"])
 
-    def _ship_bucket(self, bucket_id: str, kind: str, token: str, report: SyncReport) -> None:
-        now = self.now()
-        cursor = self.state.cursor(bucket_id)
-        start = cursor - timedelta(seconds=self.cfg.overlap_seconds) if cursor else EPOCH
-        raw = self.aw.events(bucket_id, start, now, FETCH_LIMIT)
-        if len(raw) >= FETCH_LIMIT:
-            log.warning("%s: fetch hit the %d row limit; window truncated", bucket_id, FETCH_LIMIT)
-        events = self._collect(bucket_id, kind, raw, report)
-        if not events:
-            return
+    def _fetch_span(
+        self, bucket_id: str, span_start: datetime, until: datetime, span: timedelta
+    ) -> tuple[list[dict], datetime, timedelta]:
+        """Fetch one span, halving it while the server's row limit truncates the result.
+
+        Returns (raw events, span end, span length actually used).
+        """
+        while True:
+            span_end = min(span_start + span, until)
+            raw = self.aw.events(bucket_id, span_start, span_end, FETCH_LIMIT)
+            if len(raw) < FETCH_LIMIT:
+                return raw, span_end, span
+            if span > MIN_SPAN:
+                span = max(span / 2, MIN_SPAN)
+                continue
+            log.error(
+                "%s: fetch hit the %d row limit for a %s span at %s; some events may be missed",
+                bucket_id,
+                FETCH_LIMIT,
+                MIN_SPAN,
+                span_start.isoformat(),
+            )
+            return raw, span_end, span
+
+    def _ship_span(
+        self, bucket_id: str, events: list[dict], token: str, now: datetime, report: SyncReport
+    ) -> bool:
+        """POST one span's events in batches; advance the cursor over settled ones."""
         size = self.cfg.batch_size
         for i in range(0, len(events), size):
             chunk = events[i : i + size]
@@ -192,13 +213,29 @@ class Shipper:
                 if status == 422:
                     log.warning("%s: ingest rejected a row: %s", bucket_id, text)
                 report.errors.append(f"{bucket_id}: HTTP {status} {text[:200]}")
-                return
+                return False
             report.shipped += len(chunk)
         cutoff = now - timedelta(seconds=self.cfg.settle_seconds)
         settled = [e["ts_end"] for e in events if e["ts_end"] <= cutoff]
         report.skipped_unsettled += len(events) - len(settled)
         if settled:
             self.state.advance(bucket_id, max(settled))
+        return True
+
+    def _ship_bucket(self, bucket_id: str, kind: str, token: str, report: SyncReport) -> None:
+        now = self.now()
+        cursor = self.state.cursor(bucket_id)
+        span_start = cursor - timedelta(seconds=self.cfg.overlap_seconds) if cursor else EPOCH
+        span = INITIAL_SPAN
+        while span_start < now:
+            raw, span_end, span = self._fetch_span(bucket_id, span_start, now, span)
+            events = self._collect(bucket_id, kind, raw, report)
+            if events and not self._ship_span(bucket_id, events, token, now, report):
+                return
+            # An empty span says nothing about the next one: widen it so a first pull from
+            # the epoch (or a long quiet stretch) does not need thousands of fetches.
+            span = min(span * 2, MAX_SPAN) if not raw else span
+            span_start = span_end
 
     def sync_once(self) -> SyncReport:
         report = SyncReport()

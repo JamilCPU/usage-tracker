@@ -41,10 +41,25 @@ def test_migrate_rolls_back_failed_file(usage_schema_dsn, tmp_path):
 
 
 def test_migrate_real_migrations_create_hypertable(usage_schema_dsn):
-    assert apply(usage_schema_dsn, REAL_MIGRATIONS) == ["0001", "0002"]
+    assert apply(usage_schema_dsn, REAL_MIGRATIONS) == ["0001", "0002", "0003"]
     with psycopg.connect(usage_schema_dsn) as conn:
         row = conn.execute(
             "SELECT 1 FROM timescaledb_information.hypertables "
             "WHERE hypertable_schema = 'usage' AND hypertable_name = 'events'"
         ).fetchone()
     assert row is not None
+
+
+def test_migrate_command_needs_only_owner_dsn_and_a_placeholder_secret(
+    usage_schema_dsn, monkeypatch, capsys
+):
+    from usage_web import __main__ as entry
+
+    for name in ("USAGE_READER_DSN", "OAUTH_CLIENT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("USAGE_OWNER_DSN", usage_schema_dsn)
+    monkeypatch.setenv("SESSION_SECRET", "not-used-by-migrate-0000")
+    monkeypatch.setenv("AUTH_MODE", "none")
+    monkeypatch.setenv("MIGRATIONS_DIR", str(REAL_MIGRATIONS))
+    entry._migrate()
+    assert "0001, 0002, 0003" in capsys.readouterr().out

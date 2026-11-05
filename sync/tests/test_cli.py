@@ -1,3 +1,4 @@
+import logging
 import stat
 import sys
 from datetime import UTC, datetime
@@ -7,6 +8,18 @@ import pytest
 from usage_sync import cli
 from usage_sync.shipper import SyncReport
 from usage_sync.state import State
+
+
+@pytest.fixture(autouse=True)
+def _restore_root_logging():
+    root = logging.getLogger()
+    handlers, level = list(root.handlers), root.level
+    yield
+    for h in root.handlers[:]:
+        if h not in handlers:
+            root.removeHandler(h)
+            h.close()
+    root.setLevel(level)
 
 
 def run(args, capsys):
@@ -106,6 +119,8 @@ def test_bad_config_exit_code(tmp_path, capsys):
 
 
 def test_run_loops_until_stop(tmp_path, capsys, monkeypatch):
+    installed = []
+    monkeypatch.setattr(cli.signal, "signal", lambda sig, handler: installed.append(sig))
     cfg = write_cfg(tmp_path)
     seen = {}
 
@@ -121,6 +136,7 @@ def test_run_loops_until_stop(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(cli, "AwClient", FakeAw)
     code, _, _ = run(["--config", str(cfg), "run"], capsys)
     assert code == 0 and seen["stop"].is_set()
+    assert len(installed) == 2  # SIGINT + SIGTERM went to the stub, not the real process
 
 
 def test_module_entry_point_runs():
@@ -224,3 +240,21 @@ def test_install_script_bash_syntax():
         [bash, "-n", script.as_posix()], capture_output=True, text=True, check=False, cwd=root
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_compare_uses_configured_idle_apps(tmp_path, capsys, monkeypatch):
+    cfg = write_cfg(tmp_path)
+    cfg.write_text(cfg.read_text(encoding="utf-8") + 'idle_apps = ["MyLock"]\n', encoding="utf-8")
+    seen = {}
+
+    def fake_compare(db, day, aw, tz, idle_apps):
+        seen["idle"] = list(idle_apps)
+        from usage_sync.importer import CompareReport
+
+        return CompareReport(rows=[], ratio=0)
+
+    monkeypatch.setattr(cli, "compare_activity_logger", fake_compare)
+    code, _, _ = run(
+        ["--config", str(cfg), "compare-activity-logger", "x.db", "--date", "2026-04-01"], capsys
+    )
+    assert code == 0 and "MyLock" in seen["idle"] and "lockapp.exe" in seen["idle"]
