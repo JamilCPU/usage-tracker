@@ -9,7 +9,7 @@ Only the **foreground app** is tracked. There are no browser tabs on Android (Ch
 1. Install the ActivityWatch Android app (F-Droid or Play Store).
 2. Open it and grant **Usage Access** when asked, and leave battery optimisation off for it so it keeps running.
 3. Give the phone a stable address: a DHCP reservation in the router (done by the owner). The phone must be reachable from the Linux desktop.
-4. From the desktop, check the phone's server:
+4. From the desktop, check the phone's server (unverified against the current Android app: some versions listen on localhost only, see the fallback below):
 
    ```bash
    curl http://<phone>:5600/api/0/info
@@ -28,8 +28,11 @@ usage-sync --config ~/.config/usage-sync-phone/config.toml init \
   --device <phone> --ingest-url https://ingest.lab \
   --aw-url http://<phone>:5600 --ca-file <lab-ca.pem>
 
-# 3. Token for the phone's device name (run mint-token.sh on the cluster node, copy the output over)
-( umask 077; mint-token.sh <phone> usage > ~/.config/usage-sync-phone/token )
+# 3. Token for the phone's device name. mint-token.sh lives in the lab-data-store repo on the
+#    cluster node, so mint it there over SSH and write it into this instance's directory:
+( umask 077; ssh <node> 'bash ~/src/lab-data-store/scripts/mint-token.sh <phone> usage' > ~/.config/usage-sync-phone/token )
+#    If this desktop IS the cluster node, run the script directly:
+( umask 077; bash ~/src/lab-data-store/scripts/mint-token.sh <phone> usage > ~/.config/usage-sync-phone/token )
 
 # 4. Start, then verify
 systemctl --user start usage-sync@phone
@@ -37,11 +40,15 @@ usage-sync --config ~/.config/usage-sync-phone/config.toml status    # shows the
 usage-sync --config ~/.config/usage-sync-phone/config.toml once
 ```
 
+`install-sync.sh --instance` leaves the plain `usage-sync.service` enabled. That is right when this machine also runs a local ActivityWatch; if it does not, disable it with `systemctl --user disable --now usage-sync`.
+
 State (cursors) and the token live next to the config file, so instances do not interfere. For a slow link raise `aw_timeout_seconds` (default 10) in the config.
 
 When the phone is away from home it is unreachable: the instance reports the error each cycle and backs off (up to 600 s) without moving its cursors. ActivityWatch on the phone keeps the events, and the next successful pull ships them with their original timestamps.
 
 ## Fallback: the app listens on localhost only
+
+This Termux route is untested.
 
 If a version of the app only listens on `127.0.0.1`, the desktop cannot reach it. Run the shim on the phone itself instead (not provided by this repo, outline only):
 

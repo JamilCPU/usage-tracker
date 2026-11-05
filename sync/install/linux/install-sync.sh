@@ -11,6 +11,10 @@ case "${1:-}" in
   "") ;;
   --instance)
     instance="${2:-}"
+    if [ "$#" -ne 2 ]; then
+      echo "usage: $0 [--instance NAME]" >&2
+      exit 2
+    fi
     if ! [[ "$instance" =~ ^[a-z0-9-]+$ ]]; then
       echo "error: --instance needs a name matching ^[a-z0-9-]+\$" >&2
       exit 2

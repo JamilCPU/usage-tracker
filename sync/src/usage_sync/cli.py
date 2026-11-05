@@ -15,7 +15,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from usage_sync.aw import AwClient, AwError
-from usage_sync.config import Config, ConfigError, default_config_dir
+from usage_sync.config import Config, ConfigError, default_config_dir, parse_connect_host
 from usage_sync.importer import (
     compare_activity_logger,
     import_activity_logger,
@@ -45,6 +45,10 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--ingest-url", required=True)
     init.add_argument("--aw-url")
     init.add_argument("--ca-file")
+    init.add_argument(
+        "--ingest-connect-host",
+        help="host or host:port to connect to instead of resolving the ingest URL host",
+    )
     init.add_argument("--force", action="store_true", help="overwrite an existing config")
 
     sub.add_parser("status", help="show config, ActivityWatch reachability and cursors")
@@ -70,6 +74,12 @@ def _quote(value: str) -> str:
 
 def _cmd_init(args: argparse.Namespace) -> int:
     path: Path = args.config
+    if args.ingest_connect_host:
+        try:
+            parse_connect_host(args.ingest_connect_host)
+        except ConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     if path.exists() and not args.force:
         print(f"error: {path} already exists (use --force to overwrite)", file=sys.stderr)
         return 1
@@ -79,6 +89,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
         lines.append(f"aw_url = {_quote(args.aw_url)}")
     if args.ca_file:
         lines.append(f"ca_file = {_quote(args.ca_file)}")
+    if args.ingest_connect_host:
+        lines.append(f"ingest_connect_host = {_quote(args.ingest_connect_host)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"wrote {path}")
     print(f"next: put the device token in {path.parent / 'token'} (mode 600)")
@@ -111,6 +123,8 @@ def _cmd_status(cfg: Config, path: Path, log_path: Path | None = None) -> int:
     print(f"log file:   {log_path or path.parent / 'usage-sync.log'}")
     print(f"device:     {cfg.device}")
     print(f"ingest url: {cfg.ingest_url}")
+    if cfg.ingest_connect_host:
+        print(f"connect via: {cfg.ingest_connect_host}")
     print(f"aw url:     {cfg.aw_url}")
     present = cfg.token_file.is_file()
     print(f"token file: {'present' if present else 'missing'} ({cfg.token_file})")
@@ -135,7 +149,7 @@ def _make_shipper(cfg: Config, path: Path) -> Shipper:
         cfg,
         AwClient(cfg.aw_url, cfg.aw_timeout_seconds),
         State(path.parent / "state.json"),
-        urllib_post(cfg.ca_file),
+        urllib_post(cfg.ca_file, cfg.ingest_connect_host),
         lambda: datetime.now(UTC),
     )
 
@@ -172,7 +186,7 @@ def _cmd_import(cfg: Config, args: argparse.Namespace) -> int:
             args.sqlite_path,
             args.device,
             cfg,
-            urllib_post(cfg.ca_file),
+            urllib_post(cfg.ca_file, cfg.ingest_connect_host),
             batch_size=args.batch_size,
             dry_run=args.dry_run,
         )
