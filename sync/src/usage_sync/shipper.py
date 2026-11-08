@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import partial
 
-from usage_sync.aw import AwClient
+from usage_sync.aw import AwClient, AwError
 from usage_sync.config import Config, parse_connect_host
 from usage_sync.mapping import bucket_kind, to_event
 from usage_sync.redact import Redactor
@@ -29,6 +29,7 @@ INITIAL_SPAN = timedelta(days=1)
 MIN_SPAN = timedelta(minutes=5)
 MAX_SPAN = timedelta(days=366)
 MAX_BACKOFF = 600
+TRIM_TOLERANCE = timedelta(seconds=1)
 
 Post = Callable[[str, bytes, dict[str, str]], tuple[int, bytes]]
 
@@ -176,6 +177,47 @@ class Shipper:
         events = [self.redactor.apply(e) for e in by_key.values()]
         return sorted(events, key=lambda e: e["ts_start"])
 
+    def _untrim(
+        self, bucket_id: str, raw: list[dict], start: datetime, end: datetime
+    ) -> list[dict]:
+        """Replace events that the query window may have trimmed with their by-id copy.
+
+        aw-server clips an event straddling the window to the window edge (new timestamp,
+        shorter duration), which would give the same source event a different ts_start.
+        Only events touching a window edge can be clipped, so only those are re-fetched.
+        """
+        out = []
+        for item in raw:
+            out.append(self._full_event(bucket_id, item, start, end))
+        return out
+
+    def _full_event(self, bucket_id: str, item: dict, start: datetime, end: datetime) -> dict:
+        try:
+            ts = datetime.fromisoformat(item["timestamp"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            ts_end = ts + timedelta(seconds=float(item.get("duration") or 0))
+            event_id = item["id"]
+            touches = abs(ts - start) <= TRIM_TOLERANCE or abs(ts_end - end) <= TRIM_TOLERANCE
+        except (KeyError, ValueError, TypeError, OverflowError):
+            return item  # malformed: let _collect classify it
+        if not touches or not isinstance(event_id, int):
+            return item
+        try:
+            full = self.aw.event(bucket_id, event_id)
+        except AwError as exc:
+            log.debug(
+                "%s: by-id fetch of event %s failed (%s); keeping trimmed copy",
+                bucket_id,
+                event_id,
+                exc,
+            )
+            return item
+        if not isinstance(full, dict):
+            return item
+        log.debug("%s: re-fetched possibly trimmed event %s by id", bucket_id, event_id)
+        return full
+
     def _fetch_span(
         self, bucket_id: str, span_start: datetime, until: datetime, span: timedelta
     ) -> tuple[list[dict], datetime, timedelta]:
@@ -187,7 +229,7 @@ class Shipper:
             span_end = min(span_start + span, until)
             raw = self.aw.events(bucket_id, span_start, span_end, FETCH_LIMIT)
             if len(raw) < FETCH_LIMIT:
-                return raw, span_end, span
+                return self._untrim(bucket_id, raw, span_start, span_end), span_end, span
             if span > MIN_SPAN:
                 span = max(span / 2, MIN_SPAN)
                 continue
@@ -198,7 +240,7 @@ class Shipper:
                 MIN_SPAN,
                 span_start.isoformat(),
             )
-            return raw, span_end, span
+            return self._untrim(bucket_id, raw, span_start, span_end), span_end, span
 
     def _ship_span(
         self, bucket_id: str, events: list[dict], token: str, now: datetime, report: SyncReport

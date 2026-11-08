@@ -53,3 +53,8 @@ class AwClient:
             f"/api/0/buckets/{quoted}/events",
             {"start": _iso_utc(start), "end": _iso_utc(end), "limit": limit},
         )
+
+    def event(self, bucket_id: str, event_id: int) -> dict:
+        """One event by id; unlike a windowed query, it is not trimmed to any window."""
+        quoted = urllib.parse.quote(bucket_id, safe="")
+        return self._get(f"/api/0/buckets/{quoted}/events/{int(event_id)}")

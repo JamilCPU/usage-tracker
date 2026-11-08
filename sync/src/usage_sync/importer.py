@@ -191,6 +191,8 @@ def compare_activity_logger(
     for bucket_id, bucket in aw.buckets().items():
         if bucket_kind(bucket) != "window":
             continue
+        # Not un-trimmed by id on purpose: aw-server clips events to the query window, which
+        # is exactly right for a per-day comparison (day totals are clipped to the day anyway).
         for raw in aw.events(bucket_id, lo, hi, FETCH_LIMIT):
             event = to_event(bucket_id, "window", raw, idle_apps)
             if event is not None and not event["idle"]:
