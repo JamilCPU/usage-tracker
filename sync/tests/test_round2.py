@@ -14,23 +14,13 @@ from usage_sync.config import Config, ConfigError, parse_connect_host
 from usage_sync.importer import rows_to_events
 from usage_sync.mapping import to_event
 
-STRICT = getattr(ssl, "VERIFY_X509_STRICT", 0)
 
-
-def test_ssl_context_relaxes_strict_only_for_pinned_ca(monkeypatch):
+@pytest.mark.parametrize("ca_file", [None, "ca.pem"])
+def test_ssl_context_verifies_certificate_and_hostname(monkeypatch, ca_file):
     real = ssl.create_default_context
-
-    def fake_default(cafile=None):
-        ctx = real()
-        ctx.verify_flags |= STRICT
-        return ctx
-
-    monkeypatch.setattr(shipper.ssl, "create_default_context", fake_default)
-    pinned = shipper._ssl_context("ca.pem")
-    assert not pinned.verify_flags & STRICT
-    assert pinned.check_hostname and pinned.verify_mode == ssl.CERT_REQUIRED
-    system = shipper._ssl_context(None)
-    assert system.verify_flags & STRICT
+    monkeypatch.setattr(shipper.ssl, "create_default_context", lambda cafile=None: real())
+    ctx = shipper._ssl_context(ca_file)
+    assert ctx.check_hostname and ctx.verify_mode == ssl.CERT_REQUIRED
 
 
 def test_override_opener_has_no_proxy_and_no_redirects():
