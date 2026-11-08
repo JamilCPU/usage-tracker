@@ -21,6 +21,9 @@ class FakeAw:
     def buckets(self):
         return self._buckets
 
+    def event(self, bucket_id, event_id):
+        return next(e for e in self._events[bucket_id] if e["id"] == event_id)
+
     @staticmethod
     def _span(e):
         try:
@@ -307,3 +310,84 @@ def test_first_pull_from_epoch_widens_over_empty_spans(tmp_path):
     sh.sync_once()
     assert len(aw.calls) < 120 and aw.calls[0][1] == datetime(1970, 1, 1, tzinfo=UTC)
     assert [e["source_event_id"] for e in post.calls[0][1]["events"]] == [1]
+
+
+# --- events trimmed by the AW query window are re-fetched untrimmed by id ---------------
+
+
+class TrimmingAw(FakeAw):
+    """Like aw-server-rust: events straddling the query window are trimmed to it."""
+
+    def __init__(self, events, fail_ids=()):
+        super().__init__(events)
+        self.by_id_calls = []
+        self.fail_ids = set(fail_ids)
+
+    def events(self, bucket_id, start, end, limit=5000):
+        out = []
+        for e in super().events(bucket_id, start, end, limit):
+            s, t = self._span(e)
+            ns, ne = max(s, start), min(t, end)
+            out.append({**e, "timestamp": ns.isoformat(), "duration": (ne - ns).total_seconds()})
+        return out
+
+    def event(self, bucket_id, event_id):
+        from usage_sync.aw import AwError
+
+        self.by_id_calls.append((bucket_id, event_id))
+        if event_id in self.fail_ids:
+            raise AwError("boom")
+        return next(e for e in self._events[bucket_id] if e["id"] == event_id)
+
+
+def make_trim(tmp_path, events, fail_ids=(), **over):
+    (tmp_path / "token").write_text("sekrit\n", encoding="utf-8")
+    cfg = Config(
+        ingest_url="https://ingest.example", device="pc", token_file=tmp_path / "token", **over
+    )
+    post = FakePost()
+    aw = TrimmingAw({BUCKET: events}, fail_ids)
+    return Shipper(cfg, aw, State(tmp_path / "state.json"), post, lambda: NOW), post, aw
+
+
+def shipped(post):
+    return [e for _, body, _ in post.calls for e in body["events"]]
+
+
+def test_event_straddling_span_start_is_shipped_untrimmed(tmp_path):
+    sh, post, aw = make_trim(tmp_path, [ev(1, 60, dur=1800)], overlap_seconds=0)
+    sh.state.advance(BUCKET, NOW - timedelta(minutes=45))
+    rep = sh.sync_once()
+    assert rep.errors == []
+    (e,) = shipped(post)
+    assert e["ts_start"] == (NOW - timedelta(minutes=60)).isoformat()
+    assert aw.by_id_calls == [(BUCKET, 1)]
+
+
+def test_event_straddling_two_spans_ships_once_with_full_extent(tmp_path, monkeypatch):
+    import usage_sync.shipper as mod
+
+    monkeypatch.setattr(mod, "INITIAL_SPAN", timedelta(minutes=30))
+    sh, post, aw = make_trim(tmp_path, [ev(1, 60, dur=1800), ev(2, 5, dur=10)], overlap_seconds=0)
+    # event 1 spans 11:00-11:30; start the pull at 10:50 so span edges cut through it
+    sh.state.advance(BUCKET, NOW - timedelta(minutes=70))
+    sh.sync_once()
+    rows = [e for e in shipped(post) if e["source_event_id"] == 1]
+    assert {r["ts_start"] for r in rows} == {(NOW - timedelta(minutes=60)).isoformat()}
+    assert {r["ts_end"] for r in rows} == {(NOW - timedelta(minutes=30)).isoformat()}
+
+
+def test_by_id_failure_falls_back_to_trimmed_copy(tmp_path):
+    sh, post, aw = make_trim(tmp_path, [ev(1, 60, dur=1800)], fail_ids={1}, overlap_seconds=0)
+    sh.state.advance(BUCKET, NOW - timedelta(minutes=45))
+    rep = sh.sync_once()
+    assert rep.errors == []
+    (e,) = shipped(post)
+    assert e["ts_start"] == (NOW - timedelta(minutes=45)).isoformat()
+
+
+def test_non_boundary_events_trigger_no_by_id_calls(tmp_path):
+    sh, post, aw = make_trim(tmp_path, [ev(1, 60), ev(2, 30)])
+    sh.sync_once()
+    assert aw.by_id_calls == []
+    assert len(shipped(post)) == 2
