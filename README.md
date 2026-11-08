@@ -98,7 +98,7 @@ Rules applied on the device before anything is shipped:
 
 ## Known limits
 
-- The hour filter on the events list uses the event's start hour; an event that runs across an hour boundary appears under the hour it started in. Charts and totals split time per hour.
+- The hour filter on the events list keeps every event that overlaps the selected hours, so an event running across an hour boundary shows up under both hours; its full duration is listed, not the part inside the filter. Charts and totals split time per hour.
 - The phone reports the foreground app only: no browser tabs or titles.
 - Daily totals and the device comparison always cover all hours and all apps; they ignore the hour and app filters.
 

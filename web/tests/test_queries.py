@@ -154,6 +154,24 @@ def test_events_limit_is_clamped(seed):
     assert len(page.rows) == queries.MAX_EVENTS_LIMIT and page.next_cursor is not None
 
 
+def test_events_hour_filter_matches_any_overlapping_hour(seed):
+    add = seed.add
+    add("desk-a", "window", local(10, 50), local(11, 20), app="editor", title="straddle")
+    add("desk-a", "window", local(10), local(11), app="editor", title="ends-on-the-hour")
+    add("desk-a", "window", local(23, 30), local(0, 30, day=21), app="editor", title="midnight")
+
+    def titles(hour_from, hour_to):
+        f = day_filter(hour_from=hour_from, hour_to=hour_to)
+        return sorted(r.title for r in queries.events(seed.conn, f, None).rows)
+
+    assert titles(10, 10) == ["ends-on-the-hour", "straddle"]
+    assert titles(11, 11) == ["straddle"]  # started at 10:50 but runs into the 11 o'clock hour
+    assert titles(12, 12) == []
+    assert titles(0, 0) == ["midnight"]
+    assert titles(23, 23) == ["midnight"]
+    assert titles(12, 22) == []
+
+
 def test_events_includes_overlapping_and_rejects_bad_cursor(seed):
     seed.add("desk-a", "window", local(9), local(11), app="editor")
     rows = queries.events(seed.conn, day_filter(t_from=local(10)), None).rows

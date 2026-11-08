@@ -160,12 +160,25 @@ def _decode_cursor(cursor: str) -> tuple[datetime, int]:
 
 _EVENTS_SQL = """
 SELECT id, device, ts_start, ts_end, kind, app, title, url, domain
-FROM usage.events
+FROM usage.events e
+CROSS JOIN LATERAL (
+  SELECT e.ts_start AT TIME ZONE %(tz)s AS lstart,
+         greatest(e.ts_end - interval '1 microsecond', e.ts_start) AT TIME ZONE %(tz)s AS lend
+) h
 WHERE kind IN ('window', 'web')
   AND NOT (kind = 'window' AND idle)
   AND (%(devices)s::text[] IS NULL OR device = ANY(%(devices)s))
   AND ts_end > %(t_from)s AND ts_start < %(t_to)s
-  AND extract(hour FROM ts_start AT TIME ZONE %(tz)s) BETWEEN %(hour_from)s AND %(hour_to)s
+  AND (
+    -- hour filter by overlap: keep an event if any part of it falls inside [hour_from, hour_to]
+    ts_end - ts_start >= interval '1 day'
+    OR CASE
+      WHEN date_trunc('day', h.lstart) = date_trunc('day', h.lend)
+      THEN extract(hour FROM h.lstart) <= %(hour_to)s AND extract(hour FROM h.lend) >= %(hour_from)s
+      -- crosses local midnight: the event covers start_hour..23 and 0..end_hour
+      ELSE extract(hour FROM h.lstart) <= %(hour_to)s OR extract(hour FROM h.lend) >= %(hour_from)s
+    END
+  )
   AND (%(app)s::text IS NULL OR lower(app) = lower(%(app)s))
   AND (%(domain)s::text IS NULL OR lower(domain) = lower(%(domain)s))
   AND (%(cur_ts)s::timestamptz IS NULL OR (ts_start, id) < (%(cur_ts)s, %(cur_id)s::bigint))
