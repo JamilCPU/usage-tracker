@@ -81,13 +81,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _ssl_context(ca_file: str | None) -> ssl.SSLContext:
-    ctx = ssl.create_default_context(cafile=ca_file)
-    if ca_file:
-        # Python 3.13+ enables VERIFY_X509_STRICT, which rejects a private CA certificate
-        # that lacks a keyUsage extension. For a pinned CA, drop only that flag; chain,
-        # hostname and SNI verification stay on.
-        ctx.verify_flags &= ~getattr(ssl, "VERIFY_X509_STRICT", 0)
-    return ctx
+    return ssl.create_default_context(cafile=ca_file)
 
 
 def _build_opener(ctx: ssl.SSLContext, override: tuple[str, int | None] | None):
