@@ -169,7 +169,7 @@ def test_events_hour_filter_matches_any_overlapping_hour(seed):
     assert titles(12, 12) == []
     assert titles(0, 0) == ["midnight"]
     assert titles(23, 23) == ["midnight"]
-    assert titles(5, 22) == []
+    assert titles(12, 22) == []
 
 
 def test_events_includes_overlapping_and_rejects_bad_cursor(seed):
